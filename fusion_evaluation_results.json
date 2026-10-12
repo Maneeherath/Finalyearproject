@@ -1,0 +1,9 @@
+{
+  "RF_only_accuracy_mean": 0.7633333333333333,
+  "RF_only_accuracy_std": 0.03711842908553351,
+  "Fused_realistic_accuracy_mean": 0.7933333333333333,
+  "Fused_realistic_accuracy_std": 0.05436502143433365,
+  "Fused_bestcase_accuracy_mean": 0.79,
+  "Fused_bestcase_accuracy_std": 0.030912061651652365,
+  "note": "Eye-fatigue vote omitted from this evaluation -- no real paired fatigue/addiction data exists to test it honestly. Best-case uses true scores (ANN-perfect upper bound); realistic uses scores noised by the ANN's actual CV RMSE."
+}
