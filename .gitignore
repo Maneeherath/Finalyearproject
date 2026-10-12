@@ -26,3 +26,6 @@ __pycache__/
 Thumbs.db
 .venv/
 data/eye_dataset/
+
+# Locally generated HTTPS certificate for phone access (desktop_app.py --lan)
+.streamlit/certs/
