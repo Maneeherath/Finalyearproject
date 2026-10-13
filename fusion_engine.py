@@ -20,8 +20,8 @@ THREE VOTES:
                        (Argyriou, Davison & Lee, 2017), i.e. r ≈ 0.27, which
                        caps this vote's confidence.
 
-  3. EYE-FATIGUE VOTE - literature prior (no dataset pairs eye fatigue with IGD
-                       labels). Weight from Liu & Zhou (2024): visual fatigue
+  3. EYE-FATIGUE VOTE - literature prior on the eye-state CNN's closed-eye score
+                       (no dataset pairs eye fatigue with IGD labels). Weight from Liu & Zhou (2024): visual fatigue
                        mediates ~34% of the gaming-hours -> attention-deficit link.
 
 FUSION RULE: weighted geometric mean of the probability vectors (log-linear
@@ -77,7 +77,7 @@ def cognitive_inhibition_vote(commission_rate_pct):
 # 3. Eye-fatigue vote (literature prior, explicitly NOT a trained model)
 # ------------------------------------------------------------------
 def eye_fatigue_vote(fatigue_score_0_100):
-    """fatigue_score_0_100: ResNet50 + OpenCV eye fatigue score from the app."""
+    """fatigue_score_0_100: eye fatigue score from the app (100 x mean P(eye closed))."""
     f = float(np.clip(fatigue_score_0_100 / 100.0, 0, 1))
     margin_from_uncertain = abs(f - 0.5) * 2   # 0 at f=0.5, 1 at extremes
     return _soft_lean(f), margin_from_uncertain * EYE_FATIGUE_LITERATURE_WEIGHT

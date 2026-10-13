@@ -5,7 +5,7 @@
 #  Guided patient workflow:
 #    1. Student Details      - gaming, sleep and wellbeing questionnaire
 #    2. Cognitive Tests      - 2-Back, Task-Switching, Mental Rotation, Go/No-Go
-#    3. Eye Check            - webcam ResNet50 + OpenCV (optional)
+#    3. Eye Check            - face/eye localisation + eye-state CNN (optional)
 #    4. Risk Result          - confidence-weighted late fusion + PDF report
 #    5. Solution & Plan      - personal habit changes + CBT-based reduction programme
 #  Researcher tools: model performance, continuous eye monitor
@@ -31,6 +31,8 @@ from reportlab.lib import colors
 
 # Import Late Fusion Engine module
 import fusion_engine as fe
+# Eye localisation + eye-state CNN for the Eye Check
+import eye_analysis
 # Shared feature encoding for the real-data IGD model
 import igd_features as igdf
 # Research-based cognitive battery (2-Back, Task-Switching, Mental Rotation, Go/No-Go)
@@ -64,14 +66,14 @@ def load_all_models():
     # (notebooks/07_train_real_igd_model.py, Manchanayake 2021, n = 322)
     igd = joblib.load(os.path.join(BASE, 'models', 'igd_risk_model.pkl'))
     clusters = joblib.load(os.path.join(BASE, 'models', 'igd_clusters.pkl'))
-    # Eye-fatigue ResNet50, trained on the real MRL Eye Dataset (Fusek, 2018)
-    resnet_eye_path = os.path.join(BASE, 'models', 'resnet_eye_fatigue_model.h5')
-    resnet = load_model(resnet_eye_path, compile=False) if os.path.exists(resnet_eye_path) else None
-    return igd['model'], igd['meta'], clusters, resnet
+    # Eye check: YuNet eye localisation + eye-state CNN trained on the MRL Eye Dataset
+    # (notebooks/08_train_eye_state_model.py, evaluated on people unseen in training)
+    analyzer = eye_analysis.EyeAnalyzer()
+    return igd['model'], igd['meta'], clusters, analyzer
 
 
 try:
-    igd_model, igd_meta, igd_clusters, resnet_eye_model = load_all_models()
+    igd_model, igd_meta, igd_clusters, eye_analyzer = load_all_models()
 except FileNotFoundError as e:
     st.error(f"Model file missing ({e.filename}). Run `python notebooks/07_train_real_igd_model.py` first.")
     st.stop()
@@ -219,7 +221,7 @@ def generate_pdf_report_v5(results_dict):
         [Paragraph("Cognitive vote (Go/No-Go response inhibition, literature prior)", body_style),
          Paragraph(f"<b>{results_dict['cog_pred']}</b>", body_style),
          Paragraph(f"Conf: {results_dict['cog_conf']:.2f} (Weight: {results_dict['cog_w']:.2f})", body_style)],
-        [Paragraph("Eye-fatigue vote (ResNet50 + OpenCV, literature prior)", body_style),
+        [Paragraph("Eye-fatigue vote (eye-state CNN, literature prior)", body_style),
          Paragraph(f"<b>{results_dict['eye_pred']}</b>", body_style),
          Paragraph(f"Conf: {results_dict['eye_conf']:.2f} (Weight: {results_dict['eye_w']:.2f})", body_style)],
         [Paragraph("<b>Fused result</b>", bold_body_style), Paragraph(f"<b>{results_dict['risk_level']}</b>", bold_body_style),
@@ -444,113 +446,65 @@ elif page == STEPS[2]:
         ss['eye_skipped'] = True
         go_to(STEPS[3])
 
-    st.markdown("Capture a live photo using your webcam or upload a photo to analyze visual strain, redness, and aperture openness.")
+    st.markdown("Take a photo of your face with the webcam (or upload one). The app finds both eyes and checks how open "
+                "they are — drooping or closing eyelids are the main visible sign of tiredness.")
+    st.caption("Best results: face the camera in good light. The photo is analysed in memory and never saved.")
 
-    # Choice of Input Method
     # No default selection: the webcam only turns on when chosen, so it stays free for the session monitor
     input_source = st.radio("Choose Input Method:", ["📸 Live Webcam Camera", "📁 Upload Image File"], horizontal=True, index=None)
 
     pil_img = None
-
     if input_source == "📸 Live Webcam Camera":
-        cam_photo = st.camera_input("Take a photo of your face / eyes")
+        cam_photo = st.camera_input("Take a photo of your face")
         if cam_photo:
             pil_img = Image.open(cam_photo).convert('RGB')
     elif input_source == "📁 Upload Image File":
-        uploaded_file = st.file_uploader("Upload Eye Photo (JPG/PNG)", type=["jpg", "jpeg", "png"])
+        uploaded_file = st.file_uploader("Upload a face or eye photo (JPG/PNG)", type=["jpg", "jpeg", "png"])
         if uploaded_file:
             pil_img = Image.open(uploaded_file).convert('RGB')
 
     if pil_img is not None:
-        img_array = np.array(pil_img)
-    
+        with st.spinner("🔍 Finding your eyes and checking how open they are..."):
+            res = eye_analyzer.analyze(np.array(pil_img))
         col1, col2 = st.columns(2)
-        with col1:
-            st.image(pil_img, caption="Original Input", use_container_width=True)
+        col1.image(pil_img, caption="Your photo", use_container_width=True)
+        col2.image(res['annotated_rgb'], use_container_width=True,
+                   caption=f"Eyes found: {res['eyes_found']} ({res['method']}) — label = eye state and P(closed)")
 
-        with st.spinner("🔍 Processing OpenCV Eye Biomarkers..."):
-            gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-            eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
-            eyes = eye_cascade.detectMultiScale(gray, 1.1, 5, minSize=(30, 30))
+        if res['fatigue_score'] is None and res['reason'] == 'too_small':
+            st.warning("Your eyes are too small in this photo to judge reliably — move closer to the camera so your "
+                       "face fills more of the picture, then try again (or skip this step).")
+        elif res['fatigue_score'] is None:
+            st.warning("No eyes could be found in this photo. Try again facing the camera in good light — "
+                       "or skip this step.")
+        else:
+            fatigue, level = res['fatigue_score'], res['level']
+            color = "green" if fatigue < 25 else "orange" if fatigue < 50 else "red"
+            advice = ("Your eyes look open and alert." if fatigue < 25
+                      else "Your eyelids look a little heavy — take a short screen break." if fatigue < 50
+                      else "Your eyes look partly closed — a sign of tiredness. Rest your eyes (20-20-20 rule)." if fatigue < 75
+                      else "Your eyes look closed or nearly closed — you seem very tired. Rest before gaming or studying.")
+            st.divider()
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Eye Fatigue Score", f"{fatigue}/100")
+            c2.metric("Level", level)
+            c3.metric("Eyes open (model)", f"{100 - fatigue:.0f}%")
+            c4.metric("Redness indicator", f"{res['redness']}" if res['redness'] is not None else "—",
+                      help="Uncalibrated colour measure of the white of the eye; shown for information, not scored.")
+            m = eye_analyzer.meta
+            st.caption("Per-eye probability of a closed eye: " + " · ".join(f"{p:.2f}" for p in res['p_closed'])
+                       + f". Eye-state CNN trained on the MRL Eye Dataset; on {m['test_people']} people it never saw "
+                         f"in training it was {m['accuracy'] * 100:.1f}% accurate (AUC {m['auc']:.3f}).")
+            st.markdown(f"**Status:** :{color}[**{advice}**]")
 
-            annotated = img_array.copy()
-            eye_detected = len(eyes) > 0
-            openness = 50.0
-
-            if eye_detected:
-                ex, ey, ew, eh = max(eyes, key=lambda e: e[2]*e[3])
-                cv2.rectangle(annotated, (ex, ey), (ex+ew, ey+eh), (0, 255, 0), 2)
-                cv2.putText(annotated, "Eye Detected", (ex, ey-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                eye_gray = gray[ey:ey+eh, ex:ex+ew]
-                _, bright = cv2.threshold(eye_gray, 180, 255, cv2.THRESH_BINARY)
-                openness = round(np.sum(bright > 0) / bright.size * 100, 2)
-
-            r = img_array[:, :, 0].astype(float)
-            g = img_array[:, :, 1].astype(float)
-            b = img_array[:, :, 2].astype(float)
-            redness = round(float(np.mean(np.clip(r - (g + b) / 2, 0, 255))) / 255 * 100, 2)
-            brightness = round(float(np.mean(gray)), 2)
-            contrast = round(float(np.std(gray)), 2)
-
-            # Compute OpenCV Biometric Fatigue Heuristics (0-100)
-            opencv_fatigue = 0.0
-            opencv_fatigue += 35 if openness < 15 else 20 if openness < 30 else 10 if openness < 45 else 0
-            opencv_fatigue += 30 if redness > 25 else 15 if redness > 15 else 8 if redness > 8 else 0
-            opencv_fatigue += 20 if brightness < 80 else 10 if brightness < 120 else 0
-            opencv_fatigue += 15 if contrast < 30 else 8 if contrast < 50 else 0
-            opencv_fatigue = round(min(100, opencv_fatigue), 1)
-
-            # Deep ResNet50 Transfer Learning Live Inference
-            resnet_fatigue = None
-            if resnet_eye_model is not None:
-                try:
-                    if eye_detected:
-                        crop = img_array[ey:ey+eh, ex:ex+ew]
-                    else:
-                        crop = img_array
-                    crop_resized = cv2.resize(crop, (64, 64))
-                    crop_norm = np.expand_dims(crop_resized.astype('float32') / 255.0, axis=0)
-                    p_alert = float(resnet_eye_model.predict(crop_norm, verbose=0)[0][0])
-                    # MRL model output: 1.0 = Alert, 0.0 = Fatigued
-                    resnet_fatigue = round(float(1.0 - p_alert) * 100, 1)
-                    # Unified Score: 70% Deep ResNet50 Neural Net + 30% OpenCV Biometrics
-                    fatigue = round(0.70 * resnet_fatigue + 0.30 * opencv_fatigue, 1)
-                except Exception as ex_pred:
-                    fatigue = opencv_fatigue
-            else:
-                fatigue = opencv_fatigue
-
-        with col2:
-            st.image(annotated, caption="OpenCV Cascade & Scleral Segmentation", use_container_width=True)
-
-        st.divider()
-        level = ("Alert" if fatigue < 25 else "Mildly Fatigued" if fatigue < 50
-                 else "Fatigued" if fatigue < 75 else "Severely Fatigued")
-        color = "green" if fatigue < 25 else "orange" if fatigue < 50 else "red"
-        advice = ("No significant visual fatigue detected." if fatigue < 25
-                  else "Mild eye strain detected. Take a brief break." if fatigue < 50
-                  else "Noticeable eye strain. Apply 20-20-20 rule." if fatigue < 75
-                  else "Severe ocular fatigue. Rest eyes immediately.")
-
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Eye Fatigue Score", f"{fatigue}/100")
-        c2.metric("Clinical Level", level)
-        c3.metric("Aperture Openness", f"{openness:.1f}%")
-        c4.metric("Scleral Redness", f"{redness:.1f}%")
-    
-        if resnet_fatigue is not None:
-            st.info(f"🧠 **Deep ResNet50 Neural Net Output:** {resnet_fatigue:.1f}/100 Visual Strain Probability | **OpenCV Biometrics:** {opencv_fatigue:.1f}/100")
-        
-        st.markdown(f"**Status:** :{color}[**{advice}**]")
-
-        first_scan = ss.get('eye_fatigue_score') != fatigue
-        st.session_state['eye_fatigue_score'] = fatigue
-        st.session_state['eye_fatigue_level'] = level
-        st.session_state['eye_fatigue_source'] = 'single_scan'
-        if first_scan:
-            ss.pop('last_assessment', None)      # new eye score -> result must be recalculated
-            st.rerun()                           # redraw so the sidebar ticks this step straight away
-        st.success("✅ Eye fatigue score saved for your risk result.")
+            first_scan = ss.get('eye_fatigue_score') != fatigue
+            st.session_state['eye_fatigue_score'] = fatigue
+            st.session_state['eye_fatigue_level'] = level
+            st.session_state['eye_fatigue_source'] = 'single_scan'
+            if first_scan:
+                ss.pop('last_assessment', None)      # new eye score -> result must be recalculated
+                st.rerun()                           # redraw so the sidebar ticks this step straight away
+            st.success("✅ Eye fatigue score saved for your risk result.")
 
     st.divider()
     if 'eye_fatigue_score' in ss:
@@ -878,18 +832,25 @@ elif page == "📊 Model Performance":
                 st.dataframe(comp.round(3), use_container_width=True, hide_index=True)
 
     with t_perf2:
-        st.subheader("Eye Fatigue Classifiers (MRL Eye Dataset, Fusek 2018)")
-        tab_resnet, tab_cnn = st.tabs(["ResNet50 (deployed)", "Baseline CNN"])
-        for tab, files in [(tab_resnet, ['resnet_eye_training_history.png', 'resnet_eye_confusion_matrix.png']),
-                           (tab_cnn, ['eye1_training_history.png', 'eye2_confusion_matrix.png'])]:
-            with tab:
-                for sub, fname in zip(st.tabs(["Training History", "Confusion Matrix"]), files):
-                    path = os.path.join(BASE, 'results', fname)
-                    with sub:
-                        if os.path.exists(path):
-                            st.image(path, use_container_width=True)
-                        else:
-                            st.warning(f"{fname} not found.")
+        em = eye_analyzer.meta
+        st.subheader("Eye-State Model (open vs closed eyes)")
+        st.caption(f"MRL Eye Dataset (Fusek, 2018). Subject-wise test: {em['test_people']} people "
+                   f"({em['test_images']:,} images) who were never seen in training.")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Accuracy (unseen people)", f"{em['accuracy'] * 100:.1f}%")
+        c2.metric("AUC", f"{em['auc']:.3f}")
+        c3.metric("Closed eyes caught", f"{em['recall_closed'] * 100:.1f}%")
+        c4.metric("Open eyes correct", f"{em['recall_open'] * 100:.1f}%")
+        for sub, fname in zip(st.tabs(["Training History", "Confusion Matrix"]),
+                              ['eye3_state_training_history.png', 'eye4_state_confusion_matrix.png']):
+            path = os.path.join(BASE, 'results', fname)
+            with sub:
+                if os.path.exists(path):
+                    st.image(path, use_container_width=True)
+                else:
+                    st.warning("Run `python notebooks/08_train_eye_state_model.py` to generate this chart.")
+        st.info("Earlier eye models were retired: the baseline CNN was trained on the wrong label (the MRL "
+                "'reflections' field instead of eye state), and the app read the ResNet50's output the wrong way round.")
 
     with t_perf3:
         st.subheader("Confidence-Weighted Late Fusion")
@@ -898,7 +859,7 @@ elif page == "📊 Model Performance":
 |---|---|---|
 | Behaviour | {model_name}, trained on real IGDS9-SF data | its own confidence (max probability) |
 | Cognitive | Go/No-Go commission errors — literature prior | capped at r = {fe.COGNITIVE_LITERATURE_WEIGHT:.2f} (d = {fe.INHIBITION_EFFECT_D}, Argyriou et al., 2017) |
-| Eye fatigue | ResNet50 + OpenCV score — literature prior | capped at {fe.EYE_FATIGUE_LITERATURE_WEIGHT} (Liu & Zhou, 2024) |
+| Eye fatigue | Eye-state CNN (share of closed eyes) — literature prior | capped at {fe.EYE_FATIGUE_LITERATURE_WEIGHT} (Liu & Zhou, 2024) |
 """)
         st.info("Whether fusion improves on the behaviour model alone can only be tested on data where the same students "
                 "have the questionnaire, cognitive tests and eye check; no public dataset has all three. The earlier "

@@ -13,6 +13,7 @@ import sys
 import time
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -21,7 +22,7 @@ from eye_monitor import SESSION_DIR, STATUS_FILE, STOP_FILE
 BASE = os.path.dirname(os.path.abspath(__file__))
 MONITOR_SCRIPT = os.path.join(BASE, 'eye_monitor.py')
 STALE_AFTER_S = 15     # status older than this means the monitor is no longer running
-STARTUP_GRACE_S = 120  # allowance for loading TensorFlow + ResNet50 on a slow laptop
+STARTUP_GRACE_S = 120  # allowance for loading TensorFlow + the eye model on a slow laptop
 
 
 def read_status():
@@ -34,7 +35,7 @@ def read_status():
 
 def is_running(status):
     # The monitor rewrites its status every 5 s; a stale file means it was closed or crashed.
-    # While it is still loading the ResNet50 model there is no heartbeat yet, so allow longer.
+    # While it is still loading the eye model there is no heartbeat yet, so allow longer.
     limit = STARTUP_GRACE_S if status and status.get('starting') else STALE_AFTER_S
     return bool(status and status.get('running') and time.time() - status.get('updated', 0) < limit)
 
@@ -74,8 +75,8 @@ def level_for(score):
 def plot_session(df):
     fig, ax1 = plt.subplots(figsize=(8, 3.4))
     ax1.plot(df['elapsed_min'], df['fatigue_index'], color='#e74c3c', marker='o', lw=2, label='Fatigue index')
-    if df['resnet_fatigue'].notna().any():
-        ax1.plot(df['elapsed_min'], df['resnet_fatigue'], color='#8e44ad', lw=1, ls='--', label='ResNet50 fatigue')
+    if 'mean_closed_pct' in df and df['mean_closed_pct'].notna().any():
+        ax1.plot(df['elapsed_min'], df['mean_closed_pct'], color='#8e44ad', lw=1, ls='--', label='Eyes closed (CNN, %)')
     ax1.plot(df['elapsed_min'], df['perclos_pct'], color='#f39c12', lw=1, ls=':', label='PERCLOS (%)')
     ax1.set_ylim(0, 100)
     ax1.set_xlabel('Minutes into session', fontsize=8)
@@ -95,7 +96,7 @@ def plot_session(df):
 
 def render_monitor_tab():
     st.markdown("Run the monitor **while you game**: it reads the webcam in the background (the game can be "
-                "full-screen) and logs blink rate, eye closure (PERCLOS) and the ResNet50 fatigue score every "
+                "full-screen) and logs blink rate and eye closure (PERCLOS, from the eye-state CNN) every "
                 "window. Frames are analysed in memory only — **no images are saved**.")
 
     status = read_status()
@@ -105,7 +106,7 @@ def render_monitor_tab():
         if running:
             started = time.strftime('%H:%M:%S', time.localtime(status['started']))
             if status.get('starting'):
-                st.info(f"⏳ Monitor starting (loading the ResNet50 model, ~20 s) — started {started}.")
+                st.info(f"⏳ Monitor starting (loading the eye model, ~20 s) — started {started}.")
             else:
                 st.success(f"🟢 Monitor running since {started}. Start your game — come back here to stop it.")
             last = status.get('last')
@@ -150,8 +151,8 @@ def render_monitor_tab():
     st.subheader("📈 Session results")
     path = st.selectbox("Session", sessions, format_func=session_label)
     df = pd.read_csv(path)
-    for col in ('fatigue_index', 'resnet_fatigue'):
-        df[col] = pd.to_numeric(df[col], errors='coerce')
+    for col in ('fatigue_index', 'mean_closed_pct'):
+        df[col] = pd.to_numeric(df[col], errors='coerce') if col in df else np.nan
     good = df[df['quality'] == 'ok'].dropna(subset=['fatigue_index'])
     if good.empty:
         st.warning("This session has no usable windows yet (the face was not visible enough).")
