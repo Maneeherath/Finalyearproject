@@ -36,5 +36,4 @@ data/program/
 # Eye-monitor session logs and live status
 data/eye_sessions/
 
-# Consented KDU student records (personal research data)
-data/kdu/
+

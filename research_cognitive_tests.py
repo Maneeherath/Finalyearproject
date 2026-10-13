@@ -55,14 +55,14 @@ REFERENCES = {
 }
 
 # ── Protocol constants ────────────────────────────────────────────────────────
-NB_TRIALS, NB_TARGETS, NB_N = 15, 5, 2
+NB_TRIALS, NB_TARGETS, NB_N = 12, 4, 2          # short version: 10 scored trials, 4 matches
 NB_LETTERS = ['B', 'F', 'K', 'M', 'R', 'T']
 
-GNG_TRIALS, GNG_NOGO = 20, 5          # 25% No-Go keeps "Go" the prepotent response
-GNG_WINDOW, GNG_ISI = 1.2, 0.6        # seconds: response window / blank inter-trial interval
+GNG_TRIALS, GNG_NOGO = 16, 4          # 25% No-Go keeps "Go" the prepotent response
+GNG_WINDOW, GNG_ISI = 1.0, 0.5        # seconds: response window / blank inter-trial interval
 GNG_TICK = 0.05                       # loop tick: timing resolution of onsets/omissions and click pickup
 
-TS_TRIALS = 17                        # trial 1 is neither switch nor repeat
+TS_TRIALS = 13                        # trial 1 is neither switch nor repeat -> 6 switch + 6 repeat
 TS_VOWELS, TS_CONSONANTS = ['A', 'E', 'I', 'U'], ['G', 'K', 'M', 'R']
 
 MR_LETTERS = ['R', 'F', 'G', 'J', 'L', 'P']   # asymmetric letters (normal vs mirror is distinguishable)
@@ -366,8 +366,8 @@ def render_task_switching():
 #  TEST 3: MENTAL ROTATION (COOPER & SHEPARD LETTER PARADIGM)
 # ════════════════════════════════════════════════════════════
 def _make_mr_trials():
-    angles = MR_ANGLES * 2
-    mirrored = [True] * 6 + [False] * 6
+    angles = list(MR_ANGLES)                      # one trial per angle
+    mirrored = [True] * 3 + [False] * 3
     random.shuffle(angles)
     random.shuffle(mirrored)
     return [{'letter': random.choice(MR_LETTERS), 'angle': a, 'mirrored': m} for a, m in zip(angles, mirrored)]

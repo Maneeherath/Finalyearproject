@@ -37,8 +37,6 @@ import igd_features as igdf
 import research_cognitive_tests as rct
 # Continuous eye-session logs (researcher tool)
 import eye_sessions
-# Consented, anonymous KDU student records + IGDS9-SF validation
-import kdu_data
 # Evidence-based self-help programme for reducing problem gaming (CBT components)
 import reduction_program
 
@@ -301,11 +299,11 @@ def generate_pdf_report_v5(results_dict):
 # ── Sidebar Navigation: guided patient workflow + researcher tools ────────────
 STEPS = ["1️⃣ Student Details", "2️⃣ Cognitive Tests", "3️⃣ Eye Check", "4️⃣ Risk Result", "5️⃣ Solution & Plan"]
 PATIENT_PAGES = STEPS + ["📋 Student History"]
-RESEARCH_PAGES = ["📁 KDU Student Data", "📊 Model Performance", "🎮 Eye Session Monitor"]
+RESEARCH_PAGES = ["📊 Model Performance", "🎮 Eye Session Monitor"]
 NAV_MODES = {"🩺 Patient Assessment": PATIENT_PAGES, "🔬 Researcher Tools": RESEARCH_PAGES}
 PATIENT_KEYS = ['patient_inputs', 'cognitive_results', 'mem_score', 'att_score', 'eye_fatigue_score',
                 'eye_fatigue_level', 'eye_fatigue_source', 'eye_skipped', 'last_assessment',
-                'assessment_sig', 'research_consent', 'igds_answers', 'kdu_row_id', 'details_error'] + rct.RESET_KEYS
+                'assessment_sig'] + rct.RESET_KEYS
 DEFAULT_INPUTS = dict(age=21, gender="Male", start_age=10, sports="Minor", weekday_hours=1.5, weekend_hours=2.5,
                       mode=igdf.MODES[0], genre=igdf.GENRES[0], device=igdf.DEVICES[0], sleep_hours=7.0,
                       sleep_quality=7, self_esteem=4, few_friends=2)
@@ -371,21 +369,9 @@ if page == STEPS[0]:
             weekday_hours=ss['f_weekday'], weekend_hours=ss['f_weekend'], mode=ss['f_mode'], genre=ss['f_genre'],
             device=ss['f_device'], sleep_hours=ss['f_sleep'], sleep_quality=ss['f_sleep_q'],
             self_esteem=ss['f_esteem'], few_friends=ss['f_friends'])
-        # Research participation: the 9 IGDS9-SF answers are required only if the student agrees to share
-        consent = ss['f_consent']
-        answers = [ss[f'f_igds_{i}'] for i in range(9)]
-        if consent and None in answers:
-            ss['details_error'] = ("To share your results for research, please answer all 9 gaming questions — "
-                                   "or untick the research box to continue without sharing.")
-            return
-        ss.pop('details_error', None)
-        ss['research_consent'] = consent
-        ss['igds_answers'] = [kdu_data.LIKERT_5.index(a) + 1 for a in answers] if consent else None
         ss.pop('last_assessment', None)          # answers changed -> result must be recalculated
         go_to(STEPS[1])
 
-    if ss.get('details_error'):
-        st.error(ss['details_error'])
     p = {**DEFAULT_INPUTS, **ss.get('patient_inputs', {})}
     with st.form("details_form"):
         col1, col2, col3 = st.columns(3)
@@ -408,19 +394,6 @@ if page == STEPS[0]:
             st.slider("Sleep quality (0 = very poor, 10 = excellent)", 0, 10, int(p['sleep_quality']), key="f_sleep_q")
             st.slider("How would you rate your self-esteem? (1 = very low, 5 = very high)", 1, 5, int(p['self_esteem']), key="f_esteem")
             st.slider("\"I have few or no close friends\" (1 = not true, 5 = very true)", 1, 5, int(p['few_friends']), key="f_friends")
-
-        st.divider()
-        st.markdown("**🔬 Help our research (optional)**")
-        st.checkbox(kdu_data.CONSENT_TEXT, value=ss.get('research_consent', False), key="f_consent")
-        prev = ss.get('igds_answers') or [None] * 9
-        with st.expander("If you agree: 9 questions about your gaming in the past year (about 1 minute)",
-                         expanded=bool(ss.get('details_error')) or ss.get('research_consent', False)):
-            st.info(kdu_data.IGDS_INSTRUCTIONS)
-            for i, q in enumerate(kdu_data.IGDS_ITEMS):
-                st.radio(f"**{i + 1}.** {q}", kdu_data.LIKERT_5, horizontal=True, key=f"f_igds_{i}",
-                         index=None if prev[i] is None else prev[i] - 1)
-            st.caption("Internet Gaming Disorder Scale – Short-Form (IGDS9-SF; Pontes & Griffiths, 2015). "
-                       "Answered before you see your result, so the result cannot influence your answers.")
         st.form_submit_button(f"Save details — Next: {STEPS[1]} ➡️", type="primary", use_container_width=True,
                               on_click=save_details)
 
@@ -430,7 +403,7 @@ if page == STEPS[0]:
 # ════════════════════════════════════════════════════════════
 elif page == STEPS[1]:
     st.title("2️⃣ Cognitive Tests")
-    st.markdown("Complete all four short tests (about 5 minutes). Each comes from peer-reviewed research on cognition "
+    st.markdown("Complete all four short tests (about 2–3 minutes). Each comes from peer-reviewed research on cognition "
                 "in gamers and gaming disorder.")
 
     rct.render_battery()
@@ -748,16 +721,9 @@ elif page == STEPS[3]:
             use_container_width=True
         )
 
-        sig = repr((inputs, ss['cognitive_results']['battery'], ss.get('eye_fatigue_score'),
-                    ss.get('research_consent'), ss.get('igds_answers')))
+        sig = repr((inputs, ss['cognitive_results']['battery'], ss.get('eye_fatigue_score')))
         if ss.get('assessment_sig') != sig:
             ss['assessment_sig'] = sig
-            if ss.get('research_consent'):
-                # One anonymous row per student; a student who changes answers updates their own row
-                ss.setdefault('kdu_row_id', kdu_data.next_id())
-                kdu_data.save_row(kdu_data.build_row(ss['kdu_row_id'], inputs, ss['cognitive_results']['battery'],
-                                                     ss.get('eye_fatigue_score'), ss['last_assessment'],
-                                                     ss['igds_answers']))
             ss.setdefault('history', []).append({
                 'Student': f"#{len(st.session_state['history']) + 1}",
                 'Hours/Wk': total_hours,
@@ -769,8 +735,6 @@ elif page == STEPS[3]:
             })
         if first_result:
             st.rerun()                           # redraw so the sidebar ticks this step straight away
-        if ss.get('kdu_row_id'):
-            st.caption(f"🔬 Thank you — your anonymous results were saved for research (record {ss['kdu_row_id']}).")
 
         st.divider()
         next_button(STEPS[4], f"See your solution — Next: {STEPS[4]} ➡️")
@@ -968,54 +932,6 @@ elif page == "📊 Model Performance":
         except FileNotFoundError:
             st.warning("Dataset file not found in data/external/srilanka_igd/.")
 
-
-
-# ════════════════════════════════════════════════════════════
-#  RESEARCHER TOOLS: KDU STUDENT DATA (consented records + real-world validation)
-# ════════════════════════════════════════════════════════════
-elif page == "📁 KDU Student Data":
-    st.title("📁 KDU Student Data & Validation")
-    st.caption("Anonymous records saved when a student ticked the research box in Step 1. "
-               "File: `data/kdu/kdu_assessments.csv` (kept out of git).")
-    kdf = kdu_data.load()
-    if kdf.empty:
-        st.info("No records yet. They appear here as students complete the assessment with research consent.")
-    else:
-        n = len(kdf)
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Students saved", n)
-        c2.metric("Mean IGDS9-SF (questionnaire)", f"{kdf['igds_total'].mean():.1f}")
-        c3.metric("Mean predicted score", f"{kdf['pred_igds'].mean():.1f}")
-        c4.metric("Scoring 21 or more", int((kdf['igds_total'] >= 21).sum()))
-
-        st.subheader("Does the app agree with the students' own questionnaire?")
-        if n < kdu_data.MIN_N_FOR_STATS:
-            st.info(f"Validation statistics appear once at least {kdu_data.MIN_N_FOR_STATS} students have taken part "
-                    f"(now {n}).")
-        else:
-            v = kdu_data.validation_summary(kdf)
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Spearman ρ (predicted vs actual)", kdu_data.fmt(v['rho_pred']),
-                      f"p = {kdu_data.fmt(v['p_pred'], 4)}", delta_color="off")
-            m2.metric("Mean absolute error", f"{v['mae']:.1f} points")
-            m3.metric("Same risk level", f"{v['tier_agreement'] * 100:.0f}%", f"κw = {kdu_data.fmt(v['kappa'])}",
-                      delta_color="off")
-            m4.metric("AUC (IGDS9-SF ≥ 21)", kdu_data.fmt(v['auc21']), f"{v['n_ge21']} students ≥ 21", delta_color="off")
-            st.caption(f"Does fusion help? Fused system ρ = {kdu_data.fmt(v['rho_fused'])} vs answers-only model "
-                       f"ρ = {kdu_data.fmt(v['rho_behaviour'])}. Training data (Sri Lankan A-level students): "
-                       f"ρ = {igd_meta['cv']['Spearman']:.2f}, MAE = {igd_meta['cv']['MAE']:.1f}.")
-            if n < 30:
-                st.warning(f"Only {n} students so far — report these as preliminary results (aim for 30 or more).")
-            fig_v = kdu_data.validation_chart(kdf)
-            st.pyplot(fig_v)
-            plt.close(fig_v)
-
-        st.subheader("Records")
-        show = ['student_id', 'timestamp', 'in_age', 'in_gender', 'in_weekly_hours', 'in_sleep_hours',
-                'gng_commission_rate', 'eye_fatigue_score', 'pred_igds', 'fused_risk', 'igds_total']
-        st.dataframe(kdf[[c for c in show if c in kdf]], use_container_width=True, hide_index=True)
-        st.download_button("⬇️ Download all records (CSV)", kdf.to_csv(index=False).encode('utf-8'),
-                           file_name="kdu_assessments.csv", mime="text/csv")
 
 
 # ── Footer ───────────────────────────────────────────────────
