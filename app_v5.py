@@ -2,13 +2,13 @@
 #  FINAL WEB APP v5
 #  Behaviour model trained on REAL data: 322 Sri Lankan students with the
 #  IGDS9-SF (Manchanayake, 2021; notebooks/07_train_real_igd_model.py)
-#  Features:
-#    1. Multimodal Late Fusion Engine (Confidence-Weighted Pooling)
-#    2. Live Webcam Eye Fatigue Scanner & OpenCV Processing
-#    3. Interactive "What-If" Sensitivity Simulator & Risk Lab
-#    4. Multidimensional Gamer Persona Radar Chart (Spider Web)
-#    5. 20-20-20 Eye Strain Pomodoro & Routine Planner
-#    6. Upgraded ReportLab PDF Assessment Generator
+#  Guided patient workflow:
+#    1. Student Details      - gaming, sleep and wellbeing questionnaire
+#    2. Cognitive Tests      - 2-Back, Task-Switching, Mental Rotation, Go/No-Go
+#    3. Eye Check            - webcam ResNet50 + OpenCV (optional)
+#    4. Risk Result          - confidence-weighted late fusion + PDF report
+#    5. Solution & Plan      - personal habit changes + CBT-based reduction programme
+#  Researcher tools: model performance, continuous eye monitor
 #  Student: P R M K Herath | D/BCS/23/0009
 #  Degree: BSc (Hons) Computer Science | KDU
 # ============================================================
@@ -35,9 +35,10 @@ import fusion_engine as fe
 import igd_features as igdf
 # Research-based cognitive battery (2-Back, Task-Switching, Mental Rotation, Go/No-Go)
 import research_cognitive_tests as rct
-# Validation study (IGDS9-SF criterion + SUS usability) and continuous eye-session logs
-import study_mode
+# Continuous eye-session logs (researcher tool)
 import eye_sessions
+# Consented, anonymous KDU student records + IGDS9-SF validation
+import kdu_data
 # Evidence-based self-help programme for reducing problem gaming (CBT components)
 import reduction_program
 
@@ -109,6 +110,46 @@ def answer_sensitivity(X_user, pred, top=8):
     ranked = sorted(deltas.items(), key=lambda kv: abs(kv[1]), reverse=True)[:top]
     return dict(reversed(ranked))
 
+
+def habit_changes(assessment):
+    """Changeable habits ranked by how much the real-data model's predicted IGDS9-SF score would drop."""
+    base = pd.DataFrame([assessment['features']])[igdf.FEATURES]
+    f = base.iloc[0]
+    base_score = predict_igds(base)
+    candidates = []
+    if f['weekend_hours'] > 1:
+        new = max(0.5, round(f['weekend_hours']) / 2)
+        candidates.append((f"Halve weekend gaming ({f['weekend_hours']:g} → {new:g} h/day)", {'weekend_hours': new}))
+    if f['weekday_hours'] > 1:
+        new = max(0.5, round(f['weekday_hours']) / 2)
+        candidates.append((f"Halve weekday gaming ({f['weekday_hours']:g} → {new:g} h/day)", {'weekday_hours': new}))
+    if f['sleep_hours'] < 7:
+        candidates.append((f"Sleep 7.5 h a night (now {f['sleep_hours']:g} h)", {'sleep_hours': 7.5}))
+    if f['sleep_quality'] < 8:
+        new = min(10, f['sleep_quality'] + 2)
+        candidates.append((f"Better sleep quality, e.g. no gaming in the hour before bed ({f['sleep_quality']:g} → {new:g}/10)",
+                           {'sleep_quality': new}))
+    if f['sports_level'] < 2:
+        candidates.append(("Take part in sport regularly (moderate involvement)", {'sports_level': 2}))
+    if len(candidates) > 1:
+        combined = {k: v for _, change in candidates for k, v in change.items()}
+        candidates.append(("⭐ All of the above together", combined))
+
+    rows = []
+    for label, change in candidates:
+        X = base.copy()
+        for k, v in change.items():
+            X[k] = v
+        X['weekly_hours'] = 5 * X['weekday_hours'] + 2 * X['weekend_hours']
+        score = predict_igds(X)
+        if score - base_score > -0.2 and not label.startswith("⭐"):
+            continue                                   # no meaningful improvement for this student
+        proba = igdf.tier_probabilities(score, igd_meta['sigma'])
+        rows.append({'Change': label, 'Predicted IGDS9-SF': round(score, 1), 'Change in score': round(score - base_score, 1),
+                     'Risk level (answers only)': igdf.RISK_LABELS[int(np.argmax(proba))],
+                     'Chance of High risk': f"{proba[2] * 100:.0f}%"})
+    rows.sort(key=lambda r: (not r['Change'].startswith("⭐"), r['Change in score']))
+    return rows
 
 # ── PDF Report (ReportLab) ────────────────────────────────────────────────────
 def generate_pdf_report_v5(results_dict):
@@ -257,93 +298,316 @@ def generate_pdf_report_v5(results_dict):
     buffer.seek(0)
     return buffer.getvalue()
 
-# ── Sidebar Navigation ────────────────────────────────────────────────────────
-st.sidebar.title("🎮 Gaming Predictor (v5)")
+# ── Sidebar Navigation: guided patient workflow + researcher tools ────────────
+STEPS = ["1️⃣ Student Details", "2️⃣ Cognitive Tests", "3️⃣ Eye Check", "4️⃣ Risk Result", "5️⃣ Solution & Plan"]
+PATIENT_PAGES = STEPS + ["📋 Student History"]
+RESEARCH_PAGES = ["📁 KDU Student Data", "📊 Model Performance", "🎮 Eye Session Monitor"]
+NAV_MODES = {"🩺 Patient Assessment": PATIENT_PAGES, "🔬 Researcher Tools": RESEARCH_PAGES}
+PATIENT_KEYS = ['patient_inputs', 'cognitive_results', 'mem_score', 'att_score', 'eye_fatigue_score',
+                'eye_fatigue_level', 'eye_fatigue_source', 'eye_skipped', 'last_assessment',
+                'assessment_sig', 'research_consent', 'igds_answers', 'kdu_row_id', 'details_error'] + rct.RESET_KEYS
+DEFAULT_INPUTS = dict(age=21, gender="Male", start_age=10, sports="Minor", weekday_hours=1.5, weekend_hours=2.5,
+                      mode=igdf.MODES[0], genre=igdf.GENRES[0], device=igdf.DEVICES[0], sleep_hours=7.0,
+                      sleep_quality=7, self_esteem=4, few_friends=2)
+SPORTS_LEVELS = ["None", "Minor", "Moderate", "Major"]
+ss = st.session_state
+
+
+def step_done(step):
+    return {STEPS[0]: 'patient_inputs' in ss,
+            STEPS[1]: 'cognitive_results' in ss,
+            STEPS[2]: 'eye_fatigue_score' in ss or ss.get('eye_skipped', False),
+            STEPS[3]: 'last_assessment' in ss}.get(step, False)
+
+
+def go_to(target):
+    # Used as a button callback, so it runs before the sidebar widgets are drawn
+    for nav_mode, pages in NAV_MODES.items():
+        if target in pages:
+            ss['nav_mode'] = nav_mode
+    ss['nav_page'] = target
+
+
+def new_patient():
+    for k in PATIENT_KEYS + [k for k in list(ss.keys()) if k.startswith('f_')]:   # incl. Step 1 form fields
+        ss.pop(k, None)
+    go_to(STEPS[0])
+
+
+def next_button(target, label=None):
+    st.button(label or f"Next: {target} ➡️", type="primary", use_container_width=True, on_click=go_to, args=(target,))
+
+
+st.sidebar.title("🎮 Gaming Risk Assessment")
 st.sidebar.markdown("**D/BCS/23/0009 | P R M K Herath**")
 st.sidebar.caption("General Sir John Kotelawala Defence University")
 st.sidebar.divider()
 
-page = st.sidebar.radio("Navigation Menu", [
-    "🏠 Home & Multimodal Prediction",
-    "🧠 Cognitive & Biometric Tests",
-    "👁️ Eye Fatigue Analysis",
-    "🧪 What-If Lab & Radar Profiling",
-    "⏱️ Detox & Routine Planner",
-    "🛡️ Gaming Reduction Program",
-    "📊 Model Performance & Insights",
-    "📋 Student History",
-    "📝 Validation Study"
-], key="nav_page")
+nav_mode = st.sidebar.radio("Mode", list(NAV_MODES), key="nav_mode", label_visibility="collapsed")
+options = NAV_MODES[nav_mode]
+if ss.get('nav_page') not in options:
+    ss['nav_page'] = options[0]
+page = st.sidebar.radio("Steps" if nav_mode == "🩺 Patient Assessment" else "Tools", options, key="nav_page",
+                        format_func=lambda p: f"{p}  ✅" if step_done(p) else p)
+if nav_mode == "🩺 Patient Assessment":
+    n_done = sum(step_done(s) for s in STEPS[:4])
+    st.sidebar.progress(n_done / 4, text=f"{n_done} of 4 assessment steps done")
+    st.sidebar.button("🆕 New patient", use_container_width=True, on_click=new_patient,
+                      help="Clear all answers and results to start with the next student.")
 
-# Quick Sidebar Info Badges
-if 'cognitive_results' in st.session_state:
-    cr = st.session_state['cognitive_results']
-    st.sidebar.success(f"🧠 Cognitive Loaded: RT {cr['reaction_time_ms']}ms")
-if 'eye_fatigue_score' in st.session_state:
-    st.sidebar.info(f"👁️ Eye Fatigue: {st.session_state['eye_fatigue_score']}/100")
+# ════════════════════════════════════════════════════════════
+#  STEP 1: STUDENT DETAILS
+# ════════════════════════════════════════════════════════════
+if page == STEPS[0]:
+    st.title("1️⃣ Student Details")
+    st.markdown("Answer a few questions about your gaming, sleep and wellbeing. Next come four short cognitive tests "
+                "and an eye check; then you get your risk result and a personal plan.")
+    st.caption("Screening tool from a research prototype — not a medical diagnosis.")
+
+    def save_details():
+        ss['patient_inputs'] = dict(
+            age=ss['f_age'], gender=ss['f_gender'], start_age=min(ss['f_start_age'], ss['f_age']),
+            sports=ss['f_sports'], sports_level=SPORTS_LEVELS.index(ss['f_sports']),
+            weekday_hours=ss['f_weekday'], weekend_hours=ss['f_weekend'], mode=ss['f_mode'], genre=ss['f_genre'],
+            device=ss['f_device'], sleep_hours=ss['f_sleep'], sleep_quality=ss['f_sleep_q'],
+            self_esteem=ss['f_esteem'], few_friends=ss['f_friends'])
+        # Research participation: the 9 IGDS9-SF answers are required only if the student agrees to share
+        consent = ss['f_consent']
+        answers = [ss[f'f_igds_{i}'] for i in range(9)]
+        if consent and None in answers:
+            ss['details_error'] = ("To share your results for research, please answer all 9 gaming questions — "
+                                   "or untick the research box to continue without sharing.")
+            return
+        ss.pop('details_error', None)
+        ss['research_consent'] = consent
+        ss['igds_answers'] = [kdu_data.LIKERT_5.index(a) + 1 for a in answers] if consent else None
+        ss.pop('last_assessment', None)          # answers changed -> result must be recalculated
+        go_to(STEPS[1])
+
+    if ss.get('details_error'):
+        st.error(ss['details_error'])
+    p = {**DEFAULT_INPUTS, **ss.get('patient_inputs', {})}
+    with st.form("details_form"):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown("**👤 About you**")
+            st.slider("Age", 16, 35, p['age'], key="f_age")
+            st.selectbox("Gender", ["Male", "Female"], index=["Male", "Female"].index(p['gender']), key="f_gender")
+            st.slider("Age you started gaming regularly", 3, 35, p['start_age'], key="f_start_age")
+            st.selectbox("Involvement in sports", SPORTS_LEVELS, index=SPORTS_LEVELS.index(p['sports']), key="f_sports")
+        with col2:
+            st.markdown("**🎮 Gaming habits**")
+            st.slider("Gaming on a typical weekday (hours/day)", 0.0, 12.0, float(p['weekday_hours']), step=0.5, key="f_weekday")
+            st.slider("Gaming on a typical weekend day (hours/day)", 0.0, 14.0, float(p['weekend_hours']), step=0.5, key="f_weekend")
+            st.selectbox("Main way you play", igdf.MODES, index=igdf.MODES.index(p['mode']), key="f_mode")
+            st.selectbox("Main game genre", igdf.GENRES, index=igdf.GENRES.index(p['genre']), key="f_genre")
+            st.selectbox("Main device", igdf.DEVICES, index=igdf.DEVICES.index(p['device']), key="f_device")
+        with col3:
+            st.markdown("**🌙 Sleep & wellbeing**")
+            st.slider("Sleep per night (hours)", 3.0, 10.0, float(p['sleep_hours']), step=0.5, key="f_sleep")
+            st.slider("Sleep quality (0 = very poor, 10 = excellent)", 0, 10, int(p['sleep_quality']), key="f_sleep_q")
+            st.slider("How would you rate your self-esteem? (1 = very low, 5 = very high)", 1, 5, int(p['self_esteem']), key="f_esteem")
+            st.slider("\"I have few or no close friends\" (1 = not true, 5 = very true)", 1, 5, int(p['few_friends']), key="f_friends")
+
+        st.divider()
+        st.markdown("**🔬 Help our research (optional)**")
+        st.checkbox(kdu_data.CONSENT_TEXT, value=ss.get('research_consent', False), key="f_consent")
+        prev = ss.get('igds_answers') or [None] * 9
+        with st.expander("If you agree: 9 questions about your gaming in the past year (about 1 minute)",
+                         expanded=bool(ss.get('details_error')) or ss.get('research_consent', False)):
+            st.info(kdu_data.IGDS_INSTRUCTIONS)
+            for i, q in enumerate(kdu_data.IGDS_ITEMS):
+                st.radio(f"**{i + 1}.** {q}", kdu_data.LIKERT_5, horizontal=True, key=f"f_igds_{i}",
+                         index=None if prev[i] is None else prev[i] - 1)
+            st.caption("Internet Gaming Disorder Scale – Short-Form (IGDS9-SF; Pontes & Griffiths, 2015). "
+                       "Answered before you see your result, so the result cannot influence your answers.")
+        st.form_submit_button(f"Save details — Next: {STEPS[1]} ➡️", type="primary", use_container_width=True,
+                              on_click=save_details)
 
 
 # ════════════════════════════════════════════════════════════
-#  PAGE 1: HOME & MULTIMODAL PREDICTION
+#  STEP 2: COGNITIVE TESTS (all four required)
 # ════════════════════════════════════════════════════════════
-if page == "🏠 Home & Multimodal Prediction":
-    st.title("🎮 Gaming Behavior & Cognitive Performance Predictor")
-    st.markdown("**Final Year Research Project | BSc (Hons) Computer Science | KDU**")
+elif page == STEPS[1]:
+    st.title("2️⃣ Cognitive Tests")
+    st.markdown("Complete all four short tests (about 5 minutes). Each comes from peer-reviewed research on cognition "
+                "in gamers and gaming disorder.")
 
-    cv = igd_meta['cv']
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Behaviour model", model_name, f"trained on real data (n = {igd_meta['n']})", delta_color="off")
-    m2.metric("Cross-validated R²", f"{cv['R2']:.2f}", f"MAE {cv['MAE']:.1f} IGDS9-SF points", delta_color="off")
-    m3.metric("Rank correlation (ρ)", f"{cv['Spearman']:.2f}", "predicted vs actual IGDS9-SF", delta_color="off")
-    m4.metric("Fusion", "3 modalities", "behaviour · cognition · eyes", delta_color="off")
-    st.caption(f"Model trained on {igd_meta['dataset']}. Screening estimate only — not a diagnosis.")
+    rct.render_battery()
+    battery = rct.battery_results()
+    st.divider()
 
-    has_cognitive = 'cognitive_results' in st.session_state
-    has_eye = 'eye_fatigue_score' in st.session_state
-    if has_cognitive or has_eye:
-        loaded_str = [s for s, ok in [("Cognitive Tests", has_cognitive), ("Eye Fatigue Check", has_eye)] if ok]
-        st.success(f"✅ **Multimodal mode active:** using [{', '.join(loaded_str)}]")
+    if len(battery) == 4:
+        first_completion = 'cognitive_results' not in ss
+        mem_pct, att_pct = rct.domain_scores(battery)
+        ss['cognitive_results'] = {
+            'reaction_time_ms':    battery['go_nogo']['mean_go_rt'],
+            'memory_score_pct':    mem_pct,
+            'attention_score_pct': att_pct,
+            'battery':             battery,
+        }
+        ss['mem_score'], ss['att_score'] = mem_pct, att_pct
+        if first_completion:
+            ss.pop('last_assessment', None)
+            st.rerun()                           # redraw so the sidebar ticks this step straight away
+        st.success("✅ All four tests completed.")
+        next_button(STEPS[2])
     else:
-        st.info("💡 **Tip:** Complete **🧠 Cognitive & Biometric Tests** and **👁️ Eye Fatigue Analysis** first to add the "
-                "cognitive and eye-fatigue votes to the fusion.")
+        st.caption(f"{len(battery)} of 4 tests completed.")
+
+    if st.button("🔄 Redo the tests"):
+        for k in ['cognitive_results', 'mem_score', 'att_score', 'last_assessment'] + rct.RESET_KEYS:
+            ss.pop(k, None)
+        st.rerun()
+
+
+# ════════════════════════════════════════════════════════════
+#  STEP 3: EYE CHECK (single scan; optional)
+# ════════════════════════════════════════════════════════════
+elif page == STEPS[2]:
+    st.title("3️⃣ Eye Check")
+
+    def skip_eye():
+        ss['eye_skipped'] = True
+        go_to(STEPS[3])
+
+    st.markdown("Capture a live photo using your webcam or upload a photo to analyze visual strain, redness, and aperture openness.")
+
+    # Choice of Input Method
+    # No default selection: the webcam only turns on when chosen, so it stays free for the session monitor
+    input_source = st.radio("Choose Input Method:", ["📸 Live Webcam Camera", "📁 Upload Image File"], horizontal=True, index=None)
+
+    pil_img = None
+
+    if input_source == "📸 Live Webcam Camera":
+        cam_photo = st.camera_input("Take a photo of your face / eyes")
+        if cam_photo:
+            pil_img = Image.open(cam_photo).convert('RGB')
+    elif input_source == "📁 Upload Image File":
+        uploaded_file = st.file_uploader("Upload Eye Photo (JPG/PNG)", type=["jpg", "jpeg", "png"])
+        if uploaded_file:
+            pil_img = Image.open(uploaded_file).convert('RGB')
+
+    if pil_img is not None:
+        img_array = np.array(pil_img)
+    
+        col1, col2 = st.columns(2)
+        with col1:
+            st.image(pil_img, caption="Original Input", use_container_width=True)
+
+        with st.spinner("🔍 Processing OpenCV Eye Biomarkers..."):
+            gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+            eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
+            eyes = eye_cascade.detectMultiScale(gray, 1.1, 5, minSize=(30, 30))
+
+            annotated = img_array.copy()
+            eye_detected = len(eyes) > 0
+            openness = 50.0
+
+            if eye_detected:
+                ex, ey, ew, eh = max(eyes, key=lambda e: e[2]*e[3])
+                cv2.rectangle(annotated, (ex, ey), (ex+ew, ey+eh), (0, 255, 0), 2)
+                cv2.putText(annotated, "Eye Detected", (ex, ey-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                eye_gray = gray[ey:ey+eh, ex:ex+ew]
+                _, bright = cv2.threshold(eye_gray, 180, 255, cv2.THRESH_BINARY)
+                openness = round(np.sum(bright > 0) / bright.size * 100, 2)
+
+            r = img_array[:, :, 0].astype(float)
+            g = img_array[:, :, 1].astype(float)
+            b = img_array[:, :, 2].astype(float)
+            redness = round(float(np.mean(np.clip(r - (g + b) / 2, 0, 255))) / 255 * 100, 2)
+            brightness = round(float(np.mean(gray)), 2)
+            contrast = round(float(np.std(gray)), 2)
+
+            # Compute OpenCV Biometric Fatigue Heuristics (0-100)
+            opencv_fatigue = 0.0
+            opencv_fatigue += 35 if openness < 15 else 20 if openness < 30 else 10 if openness < 45 else 0
+            opencv_fatigue += 30 if redness > 25 else 15 if redness > 15 else 8 if redness > 8 else 0
+            opencv_fatigue += 20 if brightness < 80 else 10 if brightness < 120 else 0
+            opencv_fatigue += 15 if contrast < 30 else 8 if contrast < 50 else 0
+            opencv_fatigue = round(min(100, opencv_fatigue), 1)
+
+            # Deep ResNet50 Transfer Learning Live Inference
+            resnet_fatigue = None
+            if resnet_eye_model is not None:
+                try:
+                    if eye_detected:
+                        crop = img_array[ey:ey+eh, ex:ex+ew]
+                    else:
+                        crop = img_array
+                    crop_resized = cv2.resize(crop, (64, 64))
+                    crop_norm = np.expand_dims(crop_resized.astype('float32') / 255.0, axis=0)
+                    p_alert = float(resnet_eye_model.predict(crop_norm, verbose=0)[0][0])
+                    # MRL model output: 1.0 = Alert, 0.0 = Fatigued
+                    resnet_fatigue = round(float(1.0 - p_alert) * 100, 1)
+                    # Unified Score: 70% Deep ResNet50 Neural Net + 30% OpenCV Biometrics
+                    fatigue = round(0.70 * resnet_fatigue + 0.30 * opencv_fatigue, 1)
+                except Exception as ex_pred:
+                    fatigue = opencv_fatigue
+            else:
+                fatigue = opencv_fatigue
+
+        with col2:
+            st.image(annotated, caption="OpenCV Cascade & Scleral Segmentation", use_container_width=True)
+
+        st.divider()
+        level = ("Alert" if fatigue < 25 else "Mildly Fatigued" if fatigue < 50
+                 else "Fatigued" if fatigue < 75 else "Severely Fatigued")
+        color = "green" if fatigue < 25 else "orange" if fatigue < 50 else "red"
+        advice = ("No significant visual fatigue detected." if fatigue < 25
+                  else "Mild eye strain detected. Take a brief break." if fatigue < 50
+                  else "Noticeable eye strain. Apply 20-20-20 rule." if fatigue < 75
+                  else "Severe ocular fatigue. Rest eyes immediately.")
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Eye Fatigue Score", f"{fatigue}/100")
+        c2.metric("Clinical Level", level)
+        c3.metric("Aperture Openness", f"{openness:.1f}%")
+        c4.metric("Scleral Redness", f"{redness:.1f}%")
+    
+        if resnet_fatigue is not None:
+            st.info(f"🧠 **Deep ResNet50 Neural Net Output:** {resnet_fatigue:.1f}/100 Visual Strain Probability | **OpenCV Biometrics:** {opencv_fatigue:.1f}/100")
+        
+        st.markdown(f"**Status:** :{color}[**{advice}**]")
+
+        first_scan = ss.get('eye_fatigue_score') != fatigue
+        st.session_state['eye_fatigue_score'] = fatigue
+        st.session_state['eye_fatigue_level'] = level
+        st.session_state['eye_fatigue_source'] = 'single_scan'
+        if first_scan:
+            ss.pop('last_assessment', None)      # new eye score -> result must be recalculated
+            st.rerun()                           # redraw so the sidebar ticks this step straight away
+        st.success("✅ Eye fatigue score saved for your risk result.")
 
     st.divider()
-    st.subheader("📋 Your Gaming, Sleep & Wellbeing Profile")
-    col1, col2, col3 = st.columns(3)
+    if 'eye_fatigue_score' in ss:
+        ss.pop('eye_skipped', None)
+        next_button(STEPS[3])
+    else:
+        st.button(f"Skip the eye check — Next: {STEPS[3]} ➡️", use_container_width=True, on_click=skip_eye,
+                  help="No webcam? The result is then based on your answers and cognitive tests only.")
 
-    with col1:
-        st.markdown("**👤 About you**")
-        age = st.slider("Age", 16, 35, 21)
-        gender = st.selectbox("Gender", ["Male", "Female"])
-        start_age = st.slider("Age you started gaming regularly", 3, 35, 10)
-        sports = st.selectbox("Involvement in sports", ["None", "Minor", "Moderate", "Major"])
 
-    with col2:
-        st.markdown("**🎮 Gaming habits**")
-        weekday_hours = st.slider("Gaming on a typical weekday (hours/day)", 0.0, 12.0, 1.5, step=0.5)
-        weekend_hours = st.slider("Gaming on a typical weekend day (hours/day)", 0.0, 14.0, 2.5, step=0.5)
-        mode = st.selectbox("Main way you play", igdf.MODES)
-        genre = st.selectbox("Main game genre", igdf.GENRES)
-        device = st.selectbox("Main device", igdf.DEVICES)
+# ════════════════════════════════════════════════════════════
+#  STEP 4: RISK RESULT (fusion of answers, cognitive tests and eye check)
+# ════════════════════════════════════════════════════════════
+elif page == STEPS[3]:
+    st.title("4️⃣ Risk Result")
+    missing = [s for s in STEPS[:3] if not step_done(s)]
+    if missing:
+        st.warning("Please finish these steps first to get your result:")
+        for s in missing:
+            st.button(f"Go to {s}", on_click=go_to, args=(s,), key=f"goto_{s}")
+    else:
+        first_result = 'last_assessment' not in ss
+        cv = igd_meta['cv']
+        has_cognitive = True
+        has_eye = 'eye_fatigue_score' in ss
+        inputs = dict(ss['patient_inputs'])
+        age, gender, mode, genre = inputs['age'], inputs['gender'], inputs['mode'], inputs['genre']
+        weekday_hours, weekend_hours, sleep_hours = inputs['weekday_hours'], inputs['weekend_hours'], inputs['sleep_hours']
 
-    with col3:
-        st.markdown("**🌙 Sleep & wellbeing**")
-        sleep_hours = st.slider("Sleep per night (hours)", 3.0, 10.0, 7.0, step=0.5)
-        sleep_quality = st.slider("Sleep quality (0 = very poor, 10 = excellent)", 0, 10, 7)
-        self_esteem = st.slider("How would you rate your self-esteem? (1 = very low, 5 = very high)", 1, 5, 4)
-        few_friends = st.slider("\"I have few or no close friends\" (1 = not true, 5 = very true)", 1, 5, 2)
-
-    if start_age > age:
-        st.warning("The age you started gaming is later than your current age — please check.")
-
-    st.divider()
-
-    if st.button("🚀 Perform Multimodal System Assessment", use_container_width=True, type="primary"):
         total_hours = round(5 * weekday_hours + 2 * weekend_hours, 1)
-        inputs = dict(age=age, gender=gender, start_age=min(start_age, age), sports=sports,
-                      weekday_hours=weekday_hours, weekend_hours=weekend_hours, mode=mode, genre=genre, device=device,
-                      sleep_hours=sleep_hours, sleep_quality=sleep_quality, self_esteem=self_esteem,
-                      few_friends=few_friends, sports_level=["None", "Minor", "Moderate", "Major"].index(sports))
         X_user = igdf.features_from_inputs(inputs)
 
         # 1. Behaviour vote: predicted IGDS9-SF score -> tier probabilities
@@ -400,7 +664,6 @@ if page == "🏠 Home & Multimodal Prediction":
             'pred_igds': pred_igds, 'archetype': archetype, 'archetype_desc': archetype_desc,
             'total_hours': total_hours, 'sleep_hours': sleep_hours, 'rt_actual': rt_actual, 'fatigue_val': fatigue_val,
             'features': X_user.iloc[0].to_dict(),
-            # Extra fields recorded by the validation study (Study Mode)
             'inputs': {k: v for k, v in inputs.items() if k != 'sports_level'},
             'rf_proba': [float(p) for p in beh_proba],
             'cog_proba': [float(p) for p in cog_proba],
@@ -417,7 +680,7 @@ if page == "🏠 Home & Multimodal Prediction":
             st.markdown(f"### Fused Final Risk: :{color_map[fused_pred_idx]}[{icon_map[fused_pred_idx]} {fused_risk_label}]")
             st.info(advice_map[fused_pred_idx])
             if fused_pred_idx > 0:
-                st.markdown("➡️ Open **🛡️ Gaming Reduction Program** in the menu for a personalised, research-based plan to cut down.")
+                st.markdown("➡️ Your personal plan is in **5️⃣ Solution & Plan**.")
             st.markdown(f"#### Predicted IGDS9-SF score: **{pred_igds:.1f}** / 45")
             st.progress(float(np.clip((pred_igds - 9) / 36, 0, 1)))
             st.caption(f"Typical error ±{cv['MAE']:.1f} points. Bands: ≤{igdf.TIER_LOW_MAX} low · "
@@ -485,347 +748,136 @@ if page == "🏠 Home & Multimodal Prediction":
             use_container_width=True
         )
 
-        if 'history' not in st.session_state:
-            st.session_state['history'] = []
-        st.session_state['history'].append({
-            'Student': f"#{len(st.session_state['history']) + 1}",
-            'Hours/Wk': total_hours,
-            'Sleep': sleep_hours,
-            'Predicted IGDS9-SF': round(pred_igds, 1),
-            'Behaviour Vote': beh_risk_label,
-            'Fused Risk': fused_risk_label,
-            'Profile': archetype,
-        })
-
-# ════════════════════════════════════════════════════════════
-#  PAGE 2: COGNITIVE & BIOMETRIC TESTS
-# ════════════════════════════════════════════════════════════
-elif page == "🧠 Cognitive & Biometric Tests":
-    st.title("🧠 Research-Based Cognitive Assessment Battery")
-    st.markdown("Four paradigms taken from peer-reviewed studies of cognition in video-game players and internet-gaming "
-                "disorder: working-memory updating, response inhibition, cognitive flexibility and visuospatial processing.")
-
-    rct.render_battery()
-
-    st.divider()
-    battery = rct.battery_results()
-
-    if len(battery) == 4:
-        # Aggregate the battery into the features used by the fusion engine and K-Means profiler
-        mem_pct, att_pct = rct.domain_scores(battery)
-
-        st.session_state['cognitive_results'] = {
-            'reaction_time_ms':    battery['go_nogo']['mean_go_rt'],
-            'memory_score_pct':    mem_pct,
-            'attention_score_pct': att_pct,
-            'battery':             battery
-        }
-        
-        # Populate old variables so the PDF Generator and Fusion engine don't break
-        st.session_state['mem_score'] = mem_pct
-        st.session_state['att_score'] = att_pct
-        
-        st.success("🎉 All four research-based assessments completed and synced to the prediction engine!")
-    else:
-        st.caption(f"Progress: {len(battery)}/4 tests completed. Results sync to the prediction engine once all four are done.")
-
-    if st.button("🔄 Reset Assessment Suite"):
-        for k in ['cognitive_results', 'mem_score', 'att_score'] + rct.RESET_KEYS:
-            st.session_state.pop(k, None)
-        st.rerun()
-
-
-# ════════════════════════════════════════════════════════════
-#  PAGE 3: EYE FATIGUE ANALYSIS (NOVELTY #2: LIVE WEBCAM SCANNER)
-# ════════════════════════════════════════════════════════════
-elif page == "👁️ Eye Fatigue Analysis":
-    st.title("👁️ Eye Fatigue Analysis & Computer Vision Processing")
-    tab_scan, tab_session = st.tabs(["📸 Single Scan", "🎮 Gaming Session Monitor (continuous)"])
-
-    with tab_session:
-        eye_sessions.render_monitor_tab()
-
-    with tab_scan:
-        st.markdown("Capture a live photo using your webcam or upload a photo to analyze visual strain, redness, and aperture openness.")
-
-        # Choice of Input Method
-        # No default selection: the webcam only turns on when chosen, so it stays free for the session monitor
-        input_source = st.radio("Choose Input Method:", ["📸 Live Webcam Camera", "📁 Upload Image File"], horizontal=True, index=None)
-
-        pil_img = None
-
-        if input_source == "📸 Live Webcam Camera":
-            cam_photo = st.camera_input("Take a photo of your face / eyes")
-            if cam_photo:
-                pil_img = Image.open(cam_photo).convert('RGB')
-        elif input_source == "📁 Upload Image File":
-            uploaded_file = st.file_uploader("Upload Eye Photo (JPG/PNG)", type=["jpg", "jpeg", "png"])
-            if uploaded_file:
-                pil_img = Image.open(uploaded_file).convert('RGB')
-
-        if pil_img is not None:
-            img_array = np.array(pil_img)
-        
-            col1, col2 = st.columns(2)
-            with col1:
-                st.image(pil_img, caption="Original Input", use_container_width=True)
-
-            with st.spinner("🔍 Processing OpenCV Eye Biomarkers..."):
-                gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-                eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
-                eyes = eye_cascade.detectMultiScale(gray, 1.1, 5, minSize=(30, 30))
-
-                annotated = img_array.copy()
-                eye_detected = len(eyes) > 0
-                openness = 50.0
-
-                if eye_detected:
-                    ex, ey, ew, eh = max(eyes, key=lambda e: e[2]*e[3])
-                    cv2.rectangle(annotated, (ex, ey), (ex+ew, ey+eh), (0, 255, 0), 2)
-                    cv2.putText(annotated, "Eye Detected", (ex, ey-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                    eye_gray = gray[ey:ey+eh, ex:ex+ew]
-                    _, bright = cv2.threshold(eye_gray, 180, 255, cv2.THRESH_BINARY)
-                    openness = round(np.sum(bright > 0) / bright.size * 100, 2)
-
-                r = img_array[:, :, 0].astype(float)
-                g = img_array[:, :, 1].astype(float)
-                b = img_array[:, :, 2].astype(float)
-                redness = round(float(np.mean(np.clip(r - (g + b) / 2, 0, 255))) / 255 * 100, 2)
-                brightness = round(float(np.mean(gray)), 2)
-                contrast = round(float(np.std(gray)), 2)
-
-                # Compute OpenCV Biometric Fatigue Heuristics (0-100)
-                opencv_fatigue = 0.0
-                opencv_fatigue += 35 if openness < 15 else 20 if openness < 30 else 10 if openness < 45 else 0
-                opencv_fatigue += 30 if redness > 25 else 15 if redness > 15 else 8 if redness > 8 else 0
-                opencv_fatigue += 20 if brightness < 80 else 10 if brightness < 120 else 0
-                opencv_fatigue += 15 if contrast < 30 else 8 if contrast < 50 else 0
-                opencv_fatigue = round(min(100, opencv_fatigue), 1)
-
-                # Deep ResNet50 Transfer Learning Live Inference
-                resnet_fatigue = None
-                if resnet_eye_model is not None:
-                    try:
-                        if eye_detected:
-                            crop = img_array[ey:ey+eh, ex:ex+ew]
-                        else:
-                            crop = img_array
-                        crop_resized = cv2.resize(crop, (64, 64))
-                        crop_norm = np.expand_dims(crop_resized.astype('float32') / 255.0, axis=0)
-                        p_alert = float(resnet_eye_model.predict(crop_norm, verbose=0)[0][0])
-                        # MRL model output: 1.0 = Alert, 0.0 = Fatigued
-                        resnet_fatigue = round(float(1.0 - p_alert) * 100, 1)
-                        # Unified Score: 70% Deep ResNet50 Neural Net + 30% OpenCV Biometrics
-                        fatigue = round(0.70 * resnet_fatigue + 0.30 * opencv_fatigue, 1)
-                    except Exception as ex_pred:
-                        fatigue = opencv_fatigue
-                else:
-                    fatigue = opencv_fatigue
-
-            with col2:
-                st.image(annotated, caption="OpenCV Cascade & Scleral Segmentation", use_container_width=True)
-
-            st.divider()
-            level = ("Alert" if fatigue < 25 else "Mildly Fatigued" if fatigue < 50
-                     else "Fatigued" if fatigue < 75 else "Severely Fatigued")
-            color = "green" if fatigue < 25 else "orange" if fatigue < 50 else "red"
-            advice = ("No significant visual fatigue detected." if fatigue < 25
-                      else "Mild eye strain detected. Take a brief break." if fatigue < 50
-                      else "Noticeable eye strain. Apply 20-20-20 rule." if fatigue < 75
-                      else "Severe ocular fatigue. Rest eyes immediately.")
-
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Eye Fatigue Score", f"{fatigue}/100")
-            c2.metric("Clinical Level", level)
-            c3.metric("Aperture Openness", f"{openness:.1f}%")
-            c4.metric("Scleral Redness", f"{redness:.1f}%")
-        
-            if resnet_fatigue is not None:
-                st.info(f"🧠 **Deep ResNet50 Neural Net Output:** {resnet_fatigue:.1f}/100 Visual Strain Probability | **OpenCV Biometrics:** {opencv_fatigue:.1f}/100")
-            
-            st.markdown(f"**Status:** :{color}[**{advice}**]")
-
-            st.session_state['eye_fatigue_score'] = fatigue
-            st.session_state['eye_fatigue_level'] = level
-            st.session_state['eye_fatigue_source'] = 'single_scan'
-            st.success("✅ Deep ResNet50 & OpenCV Eye Fatigue metrics saved and synced to the Multimodal Late Fusion Engine.")
-
-
-# ════════════════════════════════════════════════════════════
-#  PAGE 4: WHAT-IF LAB & RADAR PROFILING (NOVELTY #3 & #4)
-# ════════════════════════════════════════════════════════════
-elif page == "🧪 What-If Lab & Radar Profiling":
-    st.title("🧪 What-If Simulator & Radar Profiling")
-
-    last = st.session_state.get('last_assessment')
-    base_feats = pd.DataFrame([last['features']])[igdf.FEATURES] if last and 'features' in last else \
-        pd.DataFrame([igd_meta['feature_medians']])[igdf.FEATURES]
-    if not last:
-        st.info("Showing a typical student from the training data. Run an assessment on the Home page to start from your own answers.")
-
-    tab_sim, tab_radar = st.tabs(["🧪 What-If Habit Simulator", "🕸️ Radar Profile vs Real Student Groups"])
-
-    with tab_sim:
-        st.markdown("Change your habits below and see how the **real-data model's** predicted IGDS9-SF score and risk "
-                    "probabilities respond. This shows what the model has learned, not a guaranteed effect.")
-        b = base_feats.iloc[0]
-        c1, c2 = st.columns(2)
-        sim_wd = c1.slider("Weekday gaming (hours/day)", 0.0, 12.0, float(b['weekday_hours']), step=0.5)
-        sim_we = c1.slider("Weekend gaming (hours/day)", 0.0, 14.0, float(b['weekend_hours']), step=0.5)
-        sim_sleep = c2.slider("Sleep (hours/night)", 3.0, 10.0, float(b['sleep_hours']), step=0.5)
-        sim_sq = c2.slider("Sleep quality (0-10)", 0, 10, int(b['sleep_quality']))
-
-        X_sim = base_feats.copy()
-        X_sim['weekday_hours'], X_sim['weekend_hours'] = sim_wd, sim_we
-        X_sim['weekly_hours'] = 5 * sim_wd + 2 * sim_we
-        X_sim['sleep_hours'], X_sim['sleep_quality'] = sim_sleep, sim_sq
-
-        base_score, sim_score = predict_igds(base_feats), predict_igds(X_sim)
-        base_p = igdf.tier_probabilities(base_score, igd_meta['sigma'])
-        sim_p = igdf.tier_probabilities(sim_score, igd_meta['sigma'])
+        sig = repr((inputs, ss['cognitive_results']['battery'], ss.get('eye_fatigue_score'),
+                    ss.get('research_consent'), ss.get('igds_answers')))
+        if ss.get('assessment_sig') != sig:
+            ss['assessment_sig'] = sig
+            if ss.get('research_consent'):
+                # One anonymous row per student; a student who changes answers updates their own row
+                ss.setdefault('kdu_row_id', kdu_data.next_id())
+                kdu_data.save_row(kdu_data.build_row(ss['kdu_row_id'], inputs, ss['cognitive_results']['battery'],
+                                                     ss.get('eye_fatigue_score'), ss['last_assessment'],
+                                                     ss['igds_answers']))
+            ss.setdefault('history', []).append({
+                'Student': f"#{len(st.session_state['history']) + 1}",
+                'Hours/Wk': total_hours,
+                'Sleep': sleep_hours,
+                'Predicted IGDS9-SF': round(pred_igds, 1),
+                'Behaviour Vote': beh_risk_label,
+                'Fused Risk': fused_risk_label,
+                'Profile': archetype,
+            })
+        if first_result:
+            st.rerun()                           # redraw so the sidebar ticks this step straight away
+        if ss.get('kdu_row_id'):
+            st.caption(f"🔬 Thank you — your anonymous results were saved for research (record {ss['kdu_row_id']}).")
 
         st.divider()
-        mc1, mc2, mc3, mc4 = st.columns(4)
-        mc1.metric("Predicted IGDS9-SF", f"{sim_score:.1f}", f"{sim_score - base_score:+.1f} vs now", delta_color="inverse")
-        mc2.metric("P(High risk)", f"{sim_p[2] * 100:.1f}%", f"{(sim_p[2] - base_p[2]) * 100:+.1f} pts", delta_color="inverse")
-        mc3.metric("P(Low risk)", f"{sim_p[0] * 100:.1f}%", f"{(sim_p[0] - base_p[0]) * 100:+.1f} pts")
-        mc4.metric("Weekly gaming", f"{5 * sim_wd + 2 * sim_we:.1f} h", f"{(5 * sim_wd + 2 * sim_we) - float(b['weekly_hours']):+.1f} h",
-                   delta_color="inverse")
+        next_button(STEPS[4], f"See your solution — Next: {STEPS[4]} ➡️")
 
-        fig_sim, (ax_p, ax_c) = plt.subplots(1, 2, figsize=(10, 3.2))
-        x = np.arange(3)
-        ax_p.bar(x - 0.18, base_p * 100, width=0.36, label='Now', color='#95a5a6')
-        ax_p.bar(x + 0.18, sim_p * 100, width=0.36, label='Simulated', color=['#2ecc71', '#f39c12', '#e74c3c'])
-        ax_p.set_xticks(x, ['Low', 'Medium', 'High'])
-        ax_p.set_ylabel('Probability (%)', fontsize=8)
-        ax_p.set_title('Risk probabilities', fontsize=9, fontweight='bold')
-        ax_p.legend(fontsize=7)
-        hours = np.arange(0, 10.5, 0.5)
-        curve = []
-        for h in hours:
-            X_h = X_sim.copy()
-            X_h['weekday_hours'] = h
-            X_h['weekly_hours'] = 5 * h + 2 * sim_we
-            curve.append(predict_igds(X_h))
-        ax_c.plot(hours, curve, color='#8e44ad', lw=2)
-        ax_c.axvline(sim_wd, color='grey', ls='--', lw=0.8)
-        for cut in (igdf.TIER_LOW_MAX + 0.5, igdf.TIER_HIGH_MIN - 0.5):
-            ax_c.axhline(cut, color='#bdc3c7', ls=':', lw=0.8)
-        ax_c.set_xlabel('Weekday gaming (h/day), other answers fixed', fontsize=8)
-        ax_c.set_ylabel('Predicted IGDS9-SF', fontsize=8)
-        ax_c.set_title('Model response to weekday gaming', fontsize=9, fontweight='bold')
-        plt.tight_layout()
-        st.pyplot(fig_sim)
-        plt.close(fig_sim)
-        st.caption(f"The training data covered weekday gaming up to 9 h/day; predictions beyond the observed range "
-                   f"flatten out because tree-based models cannot extrapolate.")
-
-    with tab_radar:
-        st.markdown("Your answers compared with the average answers of **real students** in the training data who scored "
-                    f"low (IGDS9-SF ≤ {igdf.TIER_LOW_MAX}) or elevated (≥ 21).")
-        ref = igd_meta['radar_reference']
-        axes = [('weekday_hours', 'Weekday gaming', True), ('weekend_hours', 'Weekend gaming', True),
-                ('sleep_hours', 'Sleep hours', False), ('sleep_quality', 'Sleep quality', False),
-                ('self_esteem', 'Self-esteem', False), ('few_friends', 'Friendships', True)]
-
-        def to_scale(feat, value, invert):
-            lo, hi = ref['ranges'][feat]
-            v = (value - lo) / (hi - lo) * 100 if hi > lo else 50
-            return float(np.clip(100 - v if invert else v, 0, 100))
-
-        user = [to_scale(f, float(base_feats.iloc[0][f]), inv) for f, _, inv in axes]
-        low = [to_scale(f, ref['low_risk'][f], inv) for f, _, inv in axes]
-        high = [to_scale(f, ref['elevated'][f], inv) for f, _, inv in axes]
-        angles = np.linspace(0, 2 * np.pi, len(axes), endpoint=False).tolist()
-        angles += angles[:1]
-        fig_radar, ax_radar = plt.subplots(figsize=(6, 5), subplot_kw=dict(polar=True))
-        ax_radar.set_theta_offset(np.pi / 2)
-        ax_radar.set_theta_direction(-1)
-        ax_radar.set_xticks(angles[:-1], [f"{lab}\n(higher = healthier)" if i == 0 else lab for i, (_, lab, _) in enumerate(axes)],
-                            fontsize=8)
-        ax_radar.set_ylim(0, 100)
-        ax_radar.set_yticks([25, 50, 75, 100], ["25", "50", "75", "100"], color="grey", fontsize=7)
-        for vals, label, color, style in [(user, 'You', '#3498db', 'solid'),
-                                          (low, f"Low IGDS9-SF students (n = {ref['n_low']})", '#2ecc71', 'dashed'),
-                                          (high, f"Elevated IGDS9-SF students (n = {ref['n_elevated']})", '#e74c3c', 'dotted')]:
-            ax_radar.plot(angles, vals + vals[:1], linewidth=2 if label == 'You' else 1.5, linestyle=style, label=label, color=color)
-            if label == 'You':
-                ax_radar.fill(angles, vals + vals[:1], color, alpha=0.2)
-        ax_radar.legend(loc='upper right', bbox_to_anchor=(1.45, 1.12), fontsize=7)
-        ax_radar.set_title('Healthy-habits radar (all axes: higher = healthier)', fontsize=10, fontweight='bold', y=1.1)
-        plt.tight_layout()
-        st.pyplot(fig_radar)
-        plt.close(fig_radar)
-        st.caption("Gaming hours and 'few friends' are inverted so that, on every axis, further out means healthier.")
 
 # ════════════════════════════════════════════════════════════
-#  PAGE 5: DETOX & ROUTINE PLANNER (NOVELTY #5: 20-20-20 WIDGET)
+#  STEP 5: SOLUTION & PERSONAL PLAN
 # ════════════════════════════════════════════════════════════
-elif page == "⏱️ Detox & Routine Planner":
-    st.title("⏱️ Ergonomic Detox & Routine Planner")
-    
-    col_pomo, col_budget = st.columns([1, 1])
-    
-    with col_pomo:
-        st.subheader("👁️ 20-20-20 Eye Strain Pomodoro Timer Widget")
-        st.markdown("Every 20 minutes of screen usage, look at an object 20 feet away for 20 seconds.")
-        
-        pomo_state = st.session_state.get('pomo_active', False)
-        
-        if not pomo_state:
-            if st.button("▶️ Start 20-Minute Focus Session", use_container_width=True):
-                st.session_state['pomo_active'] = True
-                st.session_state['pomo_start'] = time.time()
-                st.rerun()
+elif page == STEPS[4]:
+    st.title("5️⃣ Solution & Personal Plan")
+    a = ss.get('last_assessment')
+    if a is None:
+        st.info("Complete steps 1–4 to get a plan matched to your result. You can still use the Gaming Reduction "
+                "Program below.")
+    else:
+        risk = a['fused_pred']
+        title, text = reduction_program.STEPS[risk]
+        box = st.error if risk == "High Risk" else st.warning if risk == "Medium Risk" else st.success
+        box(f"**{title}** — your result: **{risk}** (predicted IGDS9-SF {a['pred_igds']:.1f})\n\n{text}")
+        if risk == "High Risk":
+            st.info(reduction_program.HELP_TEXT)
+
+        # ① Habit changes with the biggest effect on the predicted score (real-data model)
+        st.subheader("① Changes that would lower your risk most")
+        changes = habit_changes(a)
+        if changes:
+            st.dataframe(pd.DataFrame(changes), use_container_width=True, hide_index=True)
+            st.caption("Estimated by the behaviour model trained on real student data. It shows associations the model "
+                       "learned, not a guaranteed effect — but these are the habits most linked to gaming-disorder symptoms.")
         else:
-            elapsed = time.time() - st.session_state.get('pomo_start', time.time())
-            remaining = max(0, int(1200 - elapsed))
-            mins, secs = divmod(remaining, 60)
-            
-            st.metric("Session Time Remaining", f"{mins:02d}:{secs:02d}")
-            st.progress(min(1.0, elapsed / 1200.0))
-            
-            if remaining == 0:
-                st.balloons()
-                st.warning("🔔 **20 Minutes Completed!** Look away at an object 20 feet away for 20 seconds now!")
-                
-            if st.button("⏹️ Reset Timer"):
-                st.session_state['pomo_active'] = False
-                st.rerun()
+            st.success("Your sleep and gaming habits are already in the healthy range the model recognises. Keep them there.")
 
-    with col_budget:
-        st.subheader("💡 Daily Gaming Time Budget Calculator")
-        target_gpa = st.slider("Target Academic GPA", 2.0, 4.0, 3.5, step=0.1)
-        needed_sleep = st.slider("Required Sleep Hours", 6.0, 9.0, 7.5, step=0.5)
-        study_hours = st.slider("Daily Study & Lecture Hours", 2.0, 10.0, 6.0, step=0.5)
-        
-        free_hours = max(0.0, 24.0 - needed_sleep - study_hours - 2.5) # 2.5h for meals/hygiene
-        rec_gaming = min(free_hours, 2.0 if target_gpa >= 3.2 else 1.0)
-        
-        st.metric("Recommended Max Gaming Budget", f"{rec_gaming:.1f} Hours/Day")
-        st.caption(f"Calculated budget leaves {free_hours - rec_gaming:.1f} hours for social & physical activities.")
+        # ② What the cognitive tests suggest
+        st.subheader("② What your test results suggest")
+        b = ss['cognitive_results']['battery']
+        commission = b['go_nogo']['commission_rate']
+        if commission >= 40:
+            st.markdown(f"- **Impulse control:** you pressed on {commission}% of the red (No-Go) circles. Weaker response "
+                        "inhibition is the cognitive pattern most linked to gaming disorder (Argyriou et al., 2017). "
+                        "**Urge surfing** and **if-then plans** in the programme below target exactly this.")
+        else:
+            st.markdown(f"- **Impulse control:** good — you held back on {100 - commission}% of the red (No-Go) circles.")
+        if b['nback']['d_prime'] < 1.5:
+            st.markdown("- **Working memory** (2-Back) was on the lower side. Sleep and fewer late-night sessions help "
+                        "concentration; re-test after two weeks of your plan.")
+        if b['task_switching']['switch_cost'] >= 300:
+            st.markdown("- **Switching between tasks** was slow. Plan study blocks without games or phone notifications "
+                        "nearby, so you are not constantly switching.")
 
+        # ③ Eye care
+        st.subheader("③ Look after your eyes")
+        fatigue = ss.get('eye_fatigue_score')
+        weekly = a['total_hours']
+        if fatigue is not None and fatigue >= 25 or weekly >= 21:
+            st.markdown("- **20-20-20 rule:** every 20 minutes of screen time, look at something 20 feet (6 m) away for "
+                        "20 seconds.\n- Keep the screen about an arm's length away, with the top at or slightly below "
+                        "eye level, and avoid a screen brighter than the room.")
+        else:
+            st.markdown("- Your eyes looked alert. Keep using the **20-20-20 rule** during long sessions.")
+        with st.expander("⏱️ 20-minute screen-break timer"):
+            if not ss.get('pomo_active'):
+                if st.button("▶️ Start 20-minute timer"):
+                    ss['pomo_active'], ss['pomo_start'] = True, time.time()
+                    st.rerun()
+            else:
+                remaining = max(0, int(1200 - (time.time() - ss['pomo_start'])))
+                st.metric("Time until your next eye break", f"{remaining // 60:02d}:{remaining % 60:02d}")
+                if remaining == 0:
+                    st.warning("🔔 Look at something 20 feet away for 20 seconds now!")
+                c1, c2 = st.columns(2)
+                c1.button("🔄 Refresh")
+                if c2.button("⏹️ Stop timer"):
+                    ss['pomo_active'] = False
+                    st.rerun()
+
+    # ④ The guided self-help programme
     st.divider()
-    st.subheader("📖 Personalized Ergonomic Guidelines")
-    st.markdown("""
-    - 💡 **Lighting Calibration:** Maintain ambient lighting equal to or brighter than screen luminescence to prevent pupillary strain.
-    - 🖥️ **Screen Distance:** Position monitor 50–70 cm (arm's length) away with the top of the screen at or slightly below eye level.
-    - 🌙 **Circadian Protection:** Enable blue-light filter mode after 20:00 to protect melatonin synthesis.
-    """)
-    st.info("Want to cut down on gaming itself? Open **🛡️ Gaming Reduction Program** for a guided, research-based plan.")
+    st.subheader("④ Your Gaming Reduction Program")
+    reduction_program.render_program_page(embedded=True)
 
 
 # ════════════════════════════════════════════════════════════
-#  PAGE 5b: GAMING REDUCTION PROGRAM (CBT-BASED SELF-HELP)
+#  STUDENT HISTORY
 # ════════════════════════════════════════════════════════════
-elif page == "🛡️ Gaming Reduction Program":
-    reduction_program.render_program_page()
+elif page == "📋 Student History":
+    st.title("📋 Assessment History (this session)")
+    if not ss.get('history'):
+        st.info(f"No assessments yet. Start with **{STEPS[0]}**.")
+    else:
+        st.dataframe(pd.DataFrame(ss['history']), use_container_width=True, hide_index=True)
+        if st.button("🗑️ Clear History"):
+            ss['history'] = []
+            st.rerun()
 
 
 # ════════════════════════════════════════════════════════════
-#  PAGE 6: MODEL PERFORMANCE & INSIGHTS
+#  RESEARCHER TOOLS: CONTINUOUS EYE SESSION MONITOR
 # ════════════════════════════════════════════════════════════
-elif page == "📊 Model Performance & Insights":
+elif page == "🎮 Eye Session Monitor":
+    st.title("🎮 Eye Session Monitor (continuous, while gaming)")
+    eye_sessions.render_monitor_tab()
+
+
+# ════════════════════════════════════════════════════════════
+#  RESEARCHER TOOLS: MODEL PERFORMANCE
+# ════════════════════════════════════════════════════════════
+elif page == "📊 Model Performance":
     st.title("📊 Model Performance Dashboard & Dataset Analytics")
 
     t_perf1, t_perf2, t_perf3, t_perf4 = st.tabs(["Behaviour Model (real data)", "👁️ Eye Fatigue Models",
@@ -885,9 +937,8 @@ elif page == "📊 Model Performance & Insights":
 | Eye fatigue | ResNet50 + OpenCV score — literature prior | capped at {fe.EYE_FATIGUE_LITERATURE_WEIGHT} (Liu & Zhou, 2024) |
 """)
         st.info("Whether fusion improves on the behaviour model alone can only be tested on data where the same students "
-                "have the questionnaire, cognitive tests and eye check. That evaluation comes from the "
-                "**📝 Validation Study** (`analyze_study.py`). The earlier 76.3% → 79.3% fusion result was computed on "
-                "synthetic data and has been withdrawn.")
+                "have the questionnaire, cognitive tests and eye check; no public dataset has all three. The earlier "
+                "76.3% → 79.3% fusion result was computed on synthetic data and has been withdrawn.")
 
     with t_perf4:
         st.subheader("Training Dataset (real survey data)")
@@ -917,36 +968,55 @@ elif page == "📊 Model Performance & Insights":
         except FileNotFoundError:
             st.warning("Dataset file not found in data/external/srilanka_igd/.")
 
+
+
 # ════════════════════════════════════════════════════════════
-#  PAGE 7: STUDENT HISTORY
+#  RESEARCHER TOOLS: KDU STUDENT DATA (consented records + real-world validation)
 # ════════════════════════════════════════════════════════════
-elif page == "📋 Student History":
-    st.title("📋 Session Assessment History")
-    if 'history' not in st.session_state or not st.session_state['history']:
-        st.info("No predictions executed yet in this session. Return to **🏠 Home & Multimodal Prediction**.")
+elif page == "📁 KDU Student Data":
+    st.title("📁 KDU Student Data & Validation")
+    st.caption("Anonymous records saved when a student ticked the research box in Step 1. "
+               "File: `data/kdu/kdu_assessments.csv` (kept out of git).")
+    kdf = kdu_data.load()
+    if kdf.empty:
+        st.info("No records yet. They appear here as students complete the assessment with research consent.")
     else:
-        df_h = pd.DataFrame(st.session_state['history'])
-        st.dataframe(df_h, use_container_width=True, hide_index=True)
-        if st.button("🗑️ Clear History"):
-            st.session_state['history'] = []
-            st.rerun()
+        n = len(kdf)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Students saved", n)
+        c2.metric("Mean IGDS9-SF (questionnaire)", f"{kdf['igds_total'].mean():.1f}")
+        c3.metric("Mean predicted score", f"{kdf['pred_igds'].mean():.1f}")
+        c4.metric("Scoring 21 or more", int((kdf['igds_total'] >= 21).sum()))
 
+        st.subheader("Does the app agree with the students' own questionnaire?")
+        if n < kdu_data.MIN_N_FOR_STATS:
+            st.info(f"Validation statistics appear once at least {kdu_data.MIN_N_FOR_STATS} students have taken part "
+                    f"(now {n}).")
+        else:
+            v = kdu_data.validation_summary(kdf)
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Spearman ρ (predicted vs actual)", kdu_data.fmt(v['rho_pred']),
+                      f"p = {kdu_data.fmt(v['p_pred'], 4)}", delta_color="off")
+            m2.metric("Mean absolute error", f"{v['mae']:.1f} points")
+            m3.metric("Same risk level", f"{v['tier_agreement'] * 100:.0f}%", f"κw = {kdu_data.fmt(v['kappa'])}",
+                      delta_color="off")
+            m4.metric("AUC (IGDS9-SF ≥ 21)", kdu_data.fmt(v['auc21']), f"{v['n_ge21']} students ≥ 21", delta_color="off")
+            st.caption(f"Does fusion help? Fused system ρ = {kdu_data.fmt(v['rho_fused'])} vs answers-only model "
+                       f"ρ = {kdu_data.fmt(v['rho_behaviour'])}. Training data (Sri Lankan A-level students): "
+                       f"ρ = {igd_meta['cv']['Spearman']:.2f}, MAE = {igd_meta['cv']['MAE']:.1f}.")
+            if n < 30:
+                st.warning(f"Only {n} students so far — report these as preliminary results (aim for 30 or more).")
+            fig_v = kdu_data.validation_chart(kdf)
+            st.pyplot(fig_v)
+            plt.close(fig_v)
 
-# ════════════════════════════════════════════════════════════
-#  PAGE 8: VALIDATION STUDY (FULL-SYSTEM TESTING WITH PARTICIPANTS)
-# ════════════════════════════════════════════════════════════
-elif page == "📝 Validation Study":
-    def reset_participant():
-        # Wipe every answer, score and widget value so the next participant starts clean
-        st.session_state.clear()
-        st.session_state['nav_page'] = "📝 Validation Study"
+        st.subheader("Records")
+        show = ['student_id', 'timestamp', 'in_age', 'in_gender', 'in_weekly_hours', 'in_sleep_hours',
+                'gng_commission_rate', 'eye_fatigue_score', 'pred_igds', 'fused_risk', 'igds_total']
+        st.dataframe(kdf[[c for c in show if c in kdf]], use_container_width=True, hide_index=True)
+        st.download_button("⬇️ Download all records (CSV)", kdf.to_csv(index=False).encode('utf-8'),
+                           file_name="kdu_assessments.csv", mime="text/csv")
 
-    study_mode.render_study_page(reset_participant)
-    st.divider()
-    with st.expander("🔒 Researcher tools"):
-        st.markdown("Analyse the collected sessions with `python analyze_study.py` — it writes the tables and charts "
-                    "for the Results chapter to `results/study/`.")
-        study_mode.render_export()
 
 # ── Footer ───────────────────────────────────────────────────
 st.sidebar.divider()

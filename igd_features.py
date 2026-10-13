@@ -20,7 +20,7 @@ from scipy.stats import norm
 BASE = os.path.dirname(os.path.abspath(__file__))
 DATA_PATH = os.path.join(BASE, 'data', 'external', 'srilanka_igd', 'IGD_Database.xlsx')
 
-# IGDS9-SF risk tiers (same cut-offs as Study Mode / analyze_study.py):
+# IGDS9-SF risk tiers:
 #   <=16 Low, 17-31 Medium, >=32 High  (>16 risky gaming; 32 = clinically validated cut-off, Qin et al., 2020)
 TIER_LOW_MAX, TIER_HIGH_MIN = 16, 32
 RISK_LABELS = ["Low Risk", "Medium Risk", "High Risk"]

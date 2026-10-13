@@ -27,7 +27,7 @@ THREE VOTES:
 FUSION RULE: weighted geometric mean of the probability vectors (log-linear
 opinion pooling), renormalised. A vote with confidence ~0 barely moves the
 result. The fusion's benefit over the behaviour model alone can only be
-evaluated on real paired data, i.e. the Validation Study (analyze_study.py).
+evaluated on real data where the same students have all three measures.
 """
 import numpy as np
 

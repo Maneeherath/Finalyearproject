@@ -32,4 +32,3 @@ The trained model files (`models/*.pkl`, `*.h5`) and the CSV are git-ignored and
 - **Cognitive vote:** measured in the app by the research-based test battery, combined as a
   literature prior (Argyriou et al., 2017), because no public dataset pairs these tests with
   gaming-disorder scores.
-- **Full-system evaluation:** the Validation Study (`study_mode.py`, `analyze_study.py`).

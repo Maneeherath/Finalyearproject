@@ -48,14 +48,14 @@ REFERENCES = [
 
 # ── Stepped care ──────────────────────────────────────────────────────────────
 STEPS = {
-    "Low Risk": ("🟢 Step 1 — Stay balanced",
+    "Low Risk": ("🟢 Level 1 — Stay balanced",
                  "Your gaming currently looks balanced. Keep it that way with light self-monitoring: log your play "
                  "for a week and set one if-then plan for your riskiest moment (e.g., late at night)."),
-    "Medium Risk": ("🟡 Step 2 — Guided self-help programme",
+    "Medium Risk": ("🟡 Level 2 — Guided self-help programme",
                     "Work through every tab below over the next 2–4 weeks: build motivation, set a weekly goal with "
                     "if-then plans, log daily, use urge surfing for cravings and challenge your gaming thinking traps. "
                     "These are the core parts of CBT programmes for problem gaming."),
-    "High Risk": ("🔴 Step 3 — Self-help plus professional support",
+    "High Risk": ("🔴 Level 3 — Self-help plus professional support",
                   "Your results suggest gaming may be causing real harm. Use this programme, **and** please talk to a "
                   "professional — CBT delivered by a trained therapist has the strongest evidence for gaming problems."),
 }
@@ -407,9 +407,11 @@ def _tab_replace(p):
 # ════════════════════════════════════════════════════════════
 #  PAGE
 # ════════════════════════════════════════════════════════════
-def render_program_page():
+def render_program_page(embedded=False):
+    """embedded=True: shown inside the app's Solution step, which already shows the title and risk banner."""
     ss = st.session_state
-    st.title("🛡️ Gaming Reduction Program")
+    if not embedded:
+        st.title("🛡️ Gaming Reduction Program")
     st.markdown("A step-by-step self-help programme built from the parts of **cognitive-behavioural therapy (CBT)** "
                 "shown to reduce problem gaming (Stevens et al., 2019; Lindenberg et al., 2022).")
     st.caption("This is a self-help tool, not therapy or a medical diagnosis.")
@@ -436,14 +438,16 @@ def render_program_page():
 
     a = ss.get('last_assessment')
     risk = a['fused_pred'] if a else None
-    if risk is None:
-        st.info("Run an assessment on **🏠 Home & Multimodal Prediction** to get a programme step matched to your risk "
-                "level. Until then, all parts below are available.")
+    if embedded:
+        pass                                  # the Solution step already shows the matched programme step
+    elif risk is None:
+        st.info("Complete the assessment steps to get a programme step matched to your risk level. Until then, all "
+                "parts below are available.")
     else:
         title, text = STEPS[risk]
         box = st.error if risk == "High Risk" else st.warning if risk == "Medium Risk" else st.success
         box(f"**{title}** (your latest result: {risk})\n\n{text}")
-    if risk == "High Risk" or (p['log'] and pd.DataFrame(p['log'])['craving'].tail(7).mean() >= 8):
+    if (risk == "High Risk" and not embedded) or (p['log'] and pd.DataFrame(p['log'])['craving'].tail(7).mean() >= 8):
         st.info(HELP_TEXT)
 
     tabs = st.tabs(["🎯 Motivation", "📅 Goals & If-Then Plans", "📓 Daily Log & Progress",

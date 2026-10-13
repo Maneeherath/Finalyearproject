@@ -127,7 +127,7 @@ def render_monitor_tab():
         else:
             if status and status.get('error'):
                 st.error(status['error'])
-            st.caption("Close other apps that use the webcam (including the Single Scan tab) before starting.")
+            st.caption("Close other apps that use the webcam (including the app's 3️⃣ Eye Check) before starting.")
             c1, c2, c3 = st.columns(3)
             duration = c1.number_input("Duration (minutes, 0 = until stopped)", 0, 480, 60, step=15)
             window = c2.select_slider("Log every", options=[15, 30, 60, 120], value=30, format_func=lambda s: f"{s} s")
