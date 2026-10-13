@@ -134,13 +134,13 @@ def build_row(ss):
     }
     row.update({f'input_{k}': v for k, v in a['inputs'].items()})
     row.update({
-        'input_total_hours_week': a['total_hours'], 'input_sleep_hours': a['sleep_hours'], 'input_gpa': a['gpa'],
-        # System outputs
-        'sys_stacking_pred': a['rf_pred'], 'sys_stacking_conf': round(a['rf_conf'], 4),
+        'input_total_hours_week': a['total_hours'], 'input_sleep_hours': a['sleep_hours'],
+        # System outputs (behaviour = real-data IGDS9-SF model)
+        'sys_behaviour_pred': a['rf_pred'], 'sys_behaviour_conf': round(a['rf_conf'], 4),
         'sys_cognitive_pred': a['cog_pred'], 'sys_eye_pred': a['eye_pred'],
         'sys_fused_pred': a['fused_pred'], 'sys_fused_idx': a['fused_idx'],
-        'sys_health_score': a['health_score'], 'sys_archetype': a['archetype'],
-        'sys_w_stacking': round(a['rf_w'], 4), 'sys_w_cognitive': round(a['cog_w'], 4), 'sys_w_eye': round(a['eye_w'], 4),
+        'sys_pred_igds': round(a['pred_igds'], 2), 'sys_archetype': a['archetype'],
+        'sys_w_behaviour': round(a['rf_w'], 4), 'sys_w_cognitive': round(a['cog_w'], 4), 'sys_w_eye': round(a['eye_w'], 4),
         'sys_used_measured_eye': a['used_measured_eye'],
         # Cognitive battery
         'cog_memory_pct': cr['memory_score_pct'], 'cog_attention_pct': cr['attention_score_pct'],
@@ -163,8 +163,8 @@ def build_row(ss):
     })
     for i, p in enumerate(a['fused_proba']):
         row[f'sys_fused_p_{["low", "medium", "high"][i]}'] = round(float(p), 4)
-    for name in ('rf', 'cog', 'eye'):
-        for i, p in enumerate(a[f'{name}_proba']):
+    for key, name in (('rf', 'behaviour'), ('cog', 'cog'), ('eye', 'eye')):
+        for i, p in enumerate(a[f'{key}_proba']):
             row[f'sys_{name}_p_{["low", "medium", "high"][i]}'] = round(float(p), 4)
     row.update({f'igds_q{i+1}': v for i, v in enumerate(igds)})
     row.update({f'sus_q{i+1}': v for i, v in enumerate(sus)})

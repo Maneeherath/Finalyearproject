@@ -29,3 +29,9 @@ data/eye_dataset/
 
 # Locally generated HTTPS certificate for phone access (desktop_app.py --lan)
 .streamlit/certs/
+
+# Students' personal progress in the Gaming Reduction Program
+data/program/
+
+# Eye-monitor session logs and live status
+data/eye_sessions/

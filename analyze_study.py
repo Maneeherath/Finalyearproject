@@ -6,7 +6,8 @@
 #    2. IGDS9-SF descriptives + internal consistency (Cronbach's alpha)
 #    3. Criterion validity: system risk vs IGDS9-SF
 #         - Spearman rho (threshold-free, primary)
-#         - fused system vs Stacking model alone (does fusion help on real users?)
+#         - fused system vs behaviour model alone (does fusion help on real users?)
+#         - external validation of the real-data model: predicted vs actual IGDS9-SF score
 #         - quadratic-weighted Cohen's kappa on 3 risk tiers
 #         - ROC AUC against IGDS9-SF disorder cut-offs (32 primary; 21 and 36 sensitivity)
 #    4. Usability: SUS mean, SD, 95% CI
@@ -103,9 +104,9 @@ def analyse(df):
     igds_items = df[[f'igds_q{i}' for i in range(1, 10)]]
     df = df.copy()
     df['fused_score'] = risk_score(df, 'sys_fused')
-    df['stacking_score'] = risk_score(df, 'sys_rf')
+    df['behaviour_score'] = risk_score(df, 'sys_behaviour')
     df['igds_tier'] = df['igds_total'].apply(igds_tier)
-    rf_idx = df['sys_stacking_pred'].map({l: i for i, l in enumerate(RISK_LABELS)})
+    rf_idx = df['sys_behaviour_pred'].map({l: i for i, l in enumerate(RISK_LABELS)})
 
     res = {'n': len(df)}
     res['sample'] = {
@@ -124,18 +125,19 @@ def analyse(df):
     }
     res['criterion_validity'] = {
         'spearman_fused_score_vs_igds': spearman(df['fused_score'], df['igds_total']),
-        'spearman_stacking_score_vs_igds': spearman(df['stacking_score'], df['igds_total']),
+        'spearman_behaviour_score_vs_igds': spearman(df['behaviour_score'], df['igds_total']),
         'spearman_fused_level_vs_igds': spearman(df['sys_fused_idx'], df['igds_total']),
-        'spearman_health_score_vs_igds': spearman(df['sys_health_score'], df['igds_total']),
+        'spearman_predicted_vs_actual_igds': spearman(df['sys_pred_igds'], df['igds_total']),
+        'mae_predicted_vs_actual_igds': round(float((df['sys_pred_igds'] - df['igds_total']).abs().mean()), 2),
         'weighted_kappa_fused': (round(float(cohen_kappa_score(df['igds_tier'], df['sys_fused_idx'],
                                                                labels=[0, 1, 2], weights='quadratic')), 3)
                                  if len(df) >= 2 else None),
-        'weighted_kappa_stacking': (round(float(cohen_kappa_score(df['igds_tier'], rf_idx,
+        'weighted_kappa_behaviour': (round(float(cohen_kappa_score(df['igds_tier'], rf_idx,
                                                                   labels=[0, 1, 2], weights='quadratic')), 3)
                                     if len(df) >= 2 else None),
         'exact_agreement_fused_pct': round(float((df['igds_tier'] == df['sys_fused_idx']).mean() * 100), 1),
         'auc_fused': [auc_at(df, c, 'fused_score') for c in [PRIMARY_CUTOFF] + SENSITIVITY_CUTOFFS],
-        'auc_stacking': [auc_at(df, c, 'stacking_score') for c in [PRIMARY_CUTOFF] + SENSITIVITY_CUTOFFS],
+        'auc_behaviour': [auc_at(df, c, 'behaviour_score') for c in [PRIMARY_CUTOFF] + SENSITIVITY_CUTOFFS],
     }
     sus = mean_ci(df['sus_score'])
     sus['median'] = round(float(df['sus_score'].median()), 1)
@@ -218,16 +220,19 @@ def write_markdown(res, paths, out):
     cv = res['criterion_validity']
     lines = [f"# Validation Study Results (n = {res['n']})", ""]
     lines += ["## Criterion validity: system risk vs IGDS9-SF", "",
-              "| Measure | Fused system | Stacking model alone |", "|---|---|---|",
+              "| Measure | Fused system | Behaviour model alone |", "|---|---|---|",
               f"| Spearman ρ (risk score vs IGDS9-SF total) | {fmt(cv['spearman_fused_score_vs_igds']['rho'])} "
-              f"(p = {fmt(cv['spearman_fused_score_vs_igds']['p'], 4)}) | {fmt(cv['spearman_stacking_score_vs_igds']['rho'])} "
-              f"(p = {fmt(cv['spearman_stacking_score_vs_igds']['p'], 4)}) |",
-              f"| Quadratic-weighted κ (3 tiers) | {fmt(cv['weighted_kappa_fused'])} | {fmt(cv['weighted_kappa_stacking'])} |"]
-    for fa, sa in zip(cv['auc_fused'], cv['auc_stacking']):
+              f"(p = {fmt(cv['spearman_fused_score_vs_igds']['p'], 4)}) | {fmt(cv['spearman_behaviour_score_vs_igds']['rho'])} "
+              f"(p = {fmt(cv['spearman_behaviour_score_vs_igds']['p'], 4)}) |",
+              f"| Quadratic-weighted κ (3 tiers) | {fmt(cv['weighted_kappa_fused'])} | {fmt(cv['weighted_kappa_behaviour'])} |"]
+    for fa, sa in zip(cv['auc_fused'], cv['auc_behaviour']):
         tag = ' (primary)' if fa['cutoff'] == PRIMARY_CUTOFF else ' (sensitivity)'
         lines.append(f"| ROC AUC, IGDS9-SF ≥ {fa['cutoff']}{tag} — {fa['positives']} positive | "
                      f"{fmt(fa['auc'])} | {fmt(sa['auc'])} |")
-    lines += ["", f"Exact 3-tier agreement (fused): {cv['exact_agreement_fused_pct']}%", ""]
+    pv = cv['spearman_predicted_vs_actual_igds']
+    lines += ["", f"Exact 3-tier agreement (fused): {cv['exact_agreement_fused_pct']}%", "",
+              "**External validation of the real-data model:** predicted vs questionnaire IGDS9-SF score — "
+              f"Spearman ρ = {fmt(pv['rho'])} (p = {fmt(pv['p'], 4)}), MAE = {fmt(cv['mae_predicted_vs_actual_igds'], 2)} points.", ""]
 
     ig = res['igds9sf']
     lines += ["## IGDS9-SF", "",
@@ -273,7 +278,7 @@ def main():
     cv = res['criterion_validity']
     print(f"Participants: {res['n']}")
     print(f"Spearman rho, fused vs IGDS9-SF:    {fmt(cv['spearman_fused_score_vs_igds']['rho'])}")
-    print(f"Spearman rho, stacking vs IGDS9-SF: {fmt(cv['spearman_stacking_score_vs_igds']['rho'])}")
+    print(f"Spearman rho, behaviour vs IGDS9-SF: {fmt(cv['spearman_behaviour_score_vs_igds']['rho'])}")
     print(f"Weighted kappa (fused):             {fmt(cv['weighted_kappa_fused'])}")
     print(f"SUS mean:                           {fmt(res['usability_sus']['mean'], 1)}")
     if res['n'] < 30:
