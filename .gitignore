@@ -12,6 +12,11 @@ __pycache__/
 *.pkl
 *.h5
 *.keras
+# ...except the ones the deployed app loads (Streamlit Community Cloud builds from the repo)
+!models/igd_risk_model.pkl
+!models/igd_clusters.pkl
+!models/resnet_eye_fatigue_model.h5
+!models/eye_state_cnn.keras
 
 # Data files (large)
 *.csv

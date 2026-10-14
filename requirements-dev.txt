@@ -1,0 +1,6 @@
+# Extra packages for training the models and the Windows desktop launcher.
+# The app itself only needs requirements.txt (used by Streamlit Community Cloud).
+-r requirements.txt
+lightgbm==4.7.0
+xgboost==3.2.0
+pywebview==5.3.2; sys_platform == "win32"

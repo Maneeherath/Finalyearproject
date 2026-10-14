@@ -97,6 +97,8 @@ def render_monitor_tab():
     st.markdown("Run the monitor **while you game**: it reads the webcam in the background (the game can be "
                 "full-screen) and logs blink rate, eye closure (PERCLOS) and the ResNet50 fatigue score every "
                 "window. Frames are analysed in memory only — **no images are saved**.")
+    st.info("🖥️ Works only when the app runs on your own computer (`streamlit run app_v5.py`): the monitor uses that "
+            "computer's webcam, so it does not work on the online version.")
 
     status = read_status()
     running = is_running(status)

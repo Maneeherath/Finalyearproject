@@ -380,6 +380,8 @@ def render_page(analyzer):
     st.caption("Researcher tool: tests whether webcam-measurable eye signs differ between heavy and light gamers. "
                "Get ethics approval before using it with real participants. Data: `data/eye_gaming_study/` "
                "(numbers only, git-ignored).")
+    st.info("🖥️ Run this study on a laptop with the app started locally (`streamlit run app_v5.py`): the recording "
+            "uses the webcam of the computer running the app, so it does not work on the online version.")
     with st.container(border=True):
         _session(analyzer)
     st.divider()

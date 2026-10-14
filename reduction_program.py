@@ -419,7 +419,9 @@ def render_program_page(embedded=False):
     if not ss.get('program_code'):
         with st.container(border=True):
             st.markdown("**Start or continue your programme.** Choose a private nickname — your progress is saved on "
-                        "this computer under that name only (no real name or student number needed).")
+                        "the computer running this app under that name only (no real name or student number needed).")
+            st.caption("On the online version, anyone who types the same nickname sees the same progress, and saved "
+                       "progress may be cleared when the server restarts — pick an unusual nickname.")
             code = st.text_input("Nickname (letters, numbers, - or _)", max_chars=30)
             if st.button("Open my programme", type="primary"):
                 if re.fullmatch(r'[A-Za-z0-9_-]{3,30}', code or ''):
