@@ -1,10 +1,12 @@
 {
+  "version": 2,
   "img_size": 48,
+  "threshold": 0.25,
+  "tta_flip": true,
   "preprocess": "grayscale, resize 48x48 (INTER_AREA), cv2.equalizeHist, /255 inside model",
-  "output": "P(eye closed)",
-  "threshold": 0.5,
-  "dataset": "MRL Eye Dataset (Fusek, 2018), eye-state field",
-  "split": "subject-wise: 25 train / 4 validation / 8 test people",
+  "output": "P(eye closed); app rescales so the threshold maps to 0.5",
+  "dataset": "MRL Eye Dataset (Fusek, 2018) + CEW (Song et al., 2014; research use only)",
+  "split": "MRL subject-wise 25/4/8 people (same 8 test people as v1); CEW split by face 70/15/15",
   "test_subjects": [
     "s0005",
     "s0006",
@@ -15,22 +17,32 @@
     "s0027",
     "s0028"
   ],
-  "epochs_trained": 7,
+  "epochs_trained": 15,
   "test_people": 8,
   "test_images": 8662,
-  "accuracy": 0.9485107365504503,
-  "auc": 0.9880412712661365,
-  "recall_closed": 0.9796992481203007,
-  "precision_closed": 0.939099099099099,
-  "recall_open": 0.8988629563135847,
+  "accuracy": 0.9571692449780651,
+  "auc": 0.9918713131572198,
+  "recall_closed": 0.9772556390977444,
+  "recall_open": 0.9251944943147815,
+  "precision_closed": 0.9541200220223894,
+  "balanced_accuracy": 0.951225066706263,
   "per_person_accuracy": {
     "s0005": 0.9796195652173914,
-    "s0006": 0.9990118577075099,
-    "s0010": 0.9147869674185464,
-    "s0013": 0.9772538141470181,
-    "s0021": 0.7537993920972644,
-    "s0023": 0.9904214559386973,
-    "s0027": 0.9548872180451128,
-    "s0028": 0.9510869565217391
+    "s0006": 0.9861660079051383,
+    "s0010": 0.9548872180451128,
+    "s0013": 0.9742024965325936,
+    "s0021": 0.8226950354609929,
+    "s0023": 0.9923371647509579,
+    "s0027": 0.9518796992481203,
+    "s0028": 0.9728260869565217
+  },
+  "cew_test": {
+    "images": 726,
+    "accuracy": 0.9655647382920111,
+    "auc": 0.9943668387488612,
+    "recall_closed": 0.972972972972973,
+    "precision_closed": 0.96,
+    "recall_open": 0.9578651685393258,
+    "balanced_accuracy": 0.9654190707561494
   }
 }

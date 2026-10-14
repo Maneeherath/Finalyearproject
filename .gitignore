@@ -37,4 +37,5 @@ data/program/
 # Eye-monitor session logs and live status
 data/eye_sessions/
 
-
+# CEW eye dataset: research use only, redistribution not allowed - never commit
+data/external/cew/

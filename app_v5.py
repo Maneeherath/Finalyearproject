@@ -493,7 +493,8 @@ elif page == STEPS[2]:
                       help="Uncalibrated colour measure of the white of the eye; shown for information, not scored.")
             m = eye_analyzer.meta
             st.caption("Per-eye probability of a closed eye: " + " · ".join(f"{p:.2f}" for p in res['p_closed'])
-                       + f". Eye-state CNN trained on the MRL Eye Dataset; on {m['test_people']} people it never saw "
+                       + f". Eye-state CNN trained on the MRL Eye Dataset"
+                         f"{' plus real-world CEW faces' if m.get('version', 1) >= 2 else ''}; on {m['test_people']} people it never saw "
                          f"in training it was {m['accuracy'] * 100:.1f}% accurate (AUC {m['auc']:.3f}).")
             st.markdown(f"**Status:** :{color}[**{advice}**]")
 
@@ -841,6 +842,11 @@ elif page == "📊 Model Performance":
         c2.metric("AUC", f"{em['auc']:.3f}")
         c3.metric("Closed eyes caught", f"{em['recall_closed'] * 100:.1f}%")
         c4.metric("Open eyes correct", f"{em['recall_open'] * 100:.1f}%")
+        if 'cew_test' in em:
+            ct = em['cew_test']
+            st.caption(f"Held-out real-world colour faces (CEW, {ct['images']} eye crops): accuracy "
+                       f"{ct['accuracy'] * 100:.1f}%, AUC {ct['auc']:.3f}. Decision threshold {em['threshold']:.2f} "
+                       f"chosen on validation people only; predictions averaged with the mirror image.")
         for sub, fname in zip(st.tabs(["Training History", "Confusion Matrix"]),
                               ['eye3_state_training_history.png', 'eye4_state_confusion_matrix.png']):
             path = os.path.join(BASE, 'results', fname)

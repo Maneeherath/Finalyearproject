@@ -33,54 +33,82 @@ def level_of(score):
             else "Fatigued" if score < 75 else "Severely Fatigued")
 
 
+def make_face_detector():
+    return cv2.FaceDetectorYN.create(YUNET_PATH, '', (320, 320), 0.7, 0.3, 5000)
+
+
+def make_eye_cascade():
+    return cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
+
+
+def _square(img, cx, cy, side):
+    h, w = img.shape[:2]
+    half = max(8, int(side / 2))
+    x0, y0 = int(max(0, cx - half)), int(max(0, cy - half))
+    x1, y1 = int(min(w, cx + half)), int(min(h, cy + half))
+    return (x0, y0, x1, y1) if x1 - x0 > 10 and y1 - y0 > 10 else None
+
+
+def find_eye_boxes(bgr, face_detector, eye_cascade):
+    """Locate the eyes -> (list of (x0, y0, x1, y1) square crops, method). Shared with training,
+    so the training crops are framed exactly like the crops the app scores."""
+    h, w = bgr.shape[:2]
+    face_detector.setInputSize((w, h))
+    _, faces = face_detector.detect(bgr)
+    if faces is not None and len(faces):
+        f = max(faces, key=lambda r: r[14])                      # highest-confidence face
+        right, left = (f[4], f[5]), (f[6], f[7])
+        iod = float(np.hypot(left[0] - right[0], left[1] - right[1]))
+        boxes = [b for b in (_square(bgr, x, y, CROP_PER_IOD * iod) for x, y in (right, left)) if b]
+        if boxes:
+            return boxes, 'face'
+    gray = cv2.equalizeHist(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY))
+    eyes = eye_cascade.detectMultiScale(gray, 1.1, 5, minSize=(max(24, w // 12), max(24, w // 12)))
+    eyes = sorted(eyes, key=lambda e: e[2] * e[3], reverse=True)[:2]
+    boxes = [b for b in (_square(bgr, x + ew / 2, y + eh / 2, CROP_PER_EYEBOX * max(ew, eh))
+                         for x, y, ew, eh in eyes) if b]
+    return boxes, ('eye close-up' if boxes else 'none')
+
+
+def prep_crop(bgr_crop, size):
+    """Shared with training: grayscale -> size x size -> histogram equalisation."""
+    gray = cv2.cvtColor(bgr_crop, cv2.COLOR_BGR2GRAY) if bgr_crop.ndim == 3 else bgr_crop
+    return cv2.equalizeHist(cv2.resize(gray, (size, size), interpolation=cv2.INTER_AREA))
+
+
+def calibrate(p, threshold):
+    """Piecewise-linear rescale so the decision threshold chosen on validation people maps to 0.5."""
+    p = np.asarray(p, dtype=float)
+    return np.where(p < threshold, 0.5 * p / threshold, 0.5 + 0.5 * (p - threshold) / (1 - threshold))
+
+
 class EyeAnalyzer:
-    def __init__(self):
+    def __init__(self, model_path=MODEL_PATH, meta_path=META_PATH):
         from tensorflow.keras.models import load_model
-        self.model = load_model(MODEL_PATH, compile=False)
-        with open(META_PATH, encoding='utf-8') as f:
+        self.model = load_model(model_path, compile=False)
+        with open(meta_path, encoding='utf-8') as f:
             self.meta = json.load(f)
         self.size = self.meta['img_size']
-        self.face = cv2.FaceDetectorYN.create(YUNET_PATH, '', (320, 320), 0.7, 0.3, 5000)
-        self.haar = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
-
-    # ── locating eyes ────────────────────────────────────────────────────────
-    @staticmethod
-    def _square(img, cx, cy, side):
-        h, w = img.shape[:2]
-        half = max(8, int(side / 2))
-        x0, y0 = int(max(0, cx - half)), int(max(0, cy - half))
-        x1, y1 = int(min(w, cx + half)), int(min(h, cy + half))
-        return (x0, y0, x1, y1) if x1 - x0 > 10 and y1 - y0 > 10 else None
+        self.threshold = float(self.meta.get('threshold', 0.5))
+        self.tta = bool(self.meta.get('tta_flip', False))
+        self.face = make_face_detector()
+        self.haar = make_eye_cascade()
 
     def find_eyes(self, bgr):
         """Returns (list of (x0, y0, x1, y1) boxes, method)."""
-        h, w = bgr.shape[:2]
-        self.face.setInputSize((w, h))
-        _, faces = self.face.detect(bgr)
-        if faces is not None and len(faces):
-            f = max(faces, key=lambda r: r[14])                  # highest-confidence face
-            right, left = (f[4], f[5]), (f[6], f[7])
-            iod = float(np.hypot(left[0] - right[0], left[1] - right[1]))
-            boxes = [b for b in (self._square(bgr, x, y, CROP_PER_IOD * iod) for x, y in (right, left)) if b]
-            if boxes:
-                return boxes, 'face'
-        gray = cv2.equalizeHist(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY))
-        eyes = self.haar.detectMultiScale(gray, 1.1, 5, minSize=(max(24, w // 12), max(24, w // 12)))
-        eyes = sorted(eyes, key=lambda e: e[2] * e[3], reverse=True)[:2]
-        boxes = [b for b in (self._square(bgr, x + ew / 2, y + eh / 2, CROP_PER_EYEBOX * max(ew, eh))
-                             for x, y, ew, eh in eyes) if b]
-        return boxes, ('eye close-up' if boxes else 'none')
+        return find_eye_boxes(bgr, self.face, self.haar)
 
     # ── scoring ──────────────────────────────────────────────────────────────
-    def _prep(self, bgr_crop):
-        gray = cv2.cvtColor(bgr_crop, cv2.COLOR_BGR2GRAY)
-        return cv2.equalizeHist(cv2.resize(gray, (self.size, self.size), interpolation=cv2.INTER_AREA))
-
     def p_closed(self, bgr, boxes):
+        """Calibrated P(eye closed) per box (0.5 = the validated decision threshold)."""
         if not boxes:
             return []
-        X = np.stack([self._prep(bgr[y0:y1, x0:x1]) for x0, y0, x1, y1 in boxes])[..., None].astype('float32')
-        return [float(p) for p in self.model.predict(X, verbose=0).ravel()]
+        X = np.stack([prep_crop(bgr[y0:y1, x0:x1], self.size) for x0, y0, x1, y1 in boxes])[..., None]
+        X = X.astype('float32')
+        p = self.model.predict(X, verbose=0).ravel()
+        if self.tta:                                          # average with the mirror image
+            p = (p + self.model.predict(X[:, :, ::-1, :], verbose=0).ravel()) / 2
+        return [float(v) for v in calibrate(p, self.threshold)]
 
     @staticmethod
     def redness(bgr, boxes):

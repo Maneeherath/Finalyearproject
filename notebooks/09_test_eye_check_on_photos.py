@@ -23,7 +23,12 @@ sys.path.insert(0, BASE)
 from eye_analysis import EyeAnalyzer  # noqa: E402
 
 folder = sys.argv[1] if len(sys.argv) > 1 else os.path.join(BASE, 'demo_run', 'eye_test')
-analyzer = EyeAnalyzer()
+# Optional 2nd argument: model version tag, e.g. "v1" -> models/eye_state_cnn_v1.keras (for comparisons)
+tag = sys.argv[2] if len(sys.argv) > 2 else ''
+suffix = f'_{tag}' if tag else ''
+analyzer = EyeAnalyzer(os.path.join(BASE, 'models', f'eye_state_cnn{suffix}.keras'),
+                       os.path.join(BASE, 'models', f'eye_state_cnn{suffix}.json'))
+print(f"Model: eye_state_cnn{suffix} (threshold {analyzer.threshold:.2f}, mirror averaging {analyzer.tta})")
 rows, tiles = [], []
 for truth in ('open', 'closed'):
     row_tiles = []
@@ -60,6 +65,6 @@ if open_scores and closed_scores:
 if tiles:
     width = max(t.shape[1] for t in tiles)
     sheet = np.vstack([np.hstack([t, np.full((t.shape[0], width - t.shape[1], 3), 255, np.uint8)]) for t in tiles])
-    out = os.path.join(BASE, 'results', 'eye5_realworld_photos.jpg')
+    out = os.path.join(BASE, 'results', f'eye5_realworld_photos{suffix}.jpg')
     cv2.imwrite(out, sheet)
     print(f"Saved {out}")
