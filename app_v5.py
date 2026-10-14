@@ -920,12 +920,7 @@ elif page == "🎮 Eye Session Monitor":
 #  RESEARCHER TOOLS: EYE–GAMING STUDY
 # ════════════════════════════════════════════════════════════
 elif page == "👁️ Eye–Gaming Study":
-    @st.cache_resource
-    def load_study_eye_analyzer():
-        # Eye-state CNN (notebooks/08_train_eye_state_model.py), loaded only for the study
-        import eye_analysis
-        return eye_analysis.EyeAnalyzer()
-    eye_gaming_study.render_page(load_study_eye_analyzer())
+    eye_gaming_study.render_page()
 
 
 # ════════════════════════════════════════════════════════════

@@ -36,6 +36,9 @@ data/eye_dataset/
 # Locally generated HTTPS certificate for phone access (desktop_app.py --lan)
 .streamlit/certs/
 
+# Passwords (e.g. STUDY_PASSWORD) - set them in Streamlit Cloud's Secrets settings, never commit
+.streamlit/secrets.toml
+
 # Students' personal progress in the Gaming Reduction Program
 data/program/
 
