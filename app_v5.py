@@ -311,6 +311,9 @@ STEPS = ["1️⃣ Student Details", "2️⃣ Cognitive Tests", "3️⃣ Eye Chec
 PATIENT_PAGES = STEPS + ["📋 Student History"]
 RESEARCH_PAGES = ["📊 Model Performance", "🎮 Eye Session Monitor", "👁️ Eye–Gaming Study"]
 NAV_MODES = {"🩺 Patient Assessment": PATIENT_PAGES, "🔬 Researcher Tools": RESEARCH_PAGES}
+# Researcher tools are for the researcher's own laptop only: hidden on the public online version
+if not eye_gaming_study.is_local():
+    NAV_MODES = {"🩺 Patient Assessment": PATIENT_PAGES}
 PATIENT_KEYS = ['patient_inputs', 'cognitive_results', 'mem_score', 'att_score', 'eye_fatigue_score',
                 'eye_fatigue_level', 'eye_fatigue_source', 'eye_skipped', 'last_assessment',
                 'assessment_sig'] + rct.RESET_KEYS
@@ -371,7 +374,10 @@ st.sidebar.markdown("**D/BCS/23/0009 | P R M K Herath**")
 st.sidebar.caption("General Sir John Kotelawala Defence University")
 st.sidebar.divider()
 
-nav_mode = st.sidebar.radio("Mode", list(NAV_MODES), key="nav_mode", label_visibility="collapsed")
+if len(NAV_MODES) > 1:
+    nav_mode = st.sidebar.radio("Mode", list(NAV_MODES), key="nav_mode", label_visibility="collapsed")
+else:                                            # online: patient assessment only, no mode switch
+    nav_mode = ss['nav_mode'] = next(iter(NAV_MODES))
 options = NAV_MODES[nav_mode]
 if ss.get('nav_page') not in options:
     ss['nav_page'] = options[0]
