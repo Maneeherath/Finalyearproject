@@ -37,5 +37,8 @@ data/program/
 # Eye-monitor session logs and live status
 data/eye_sessions/
 
+# Eye-gaming study responses (participant data)
+data/eye_gaming_study/
+
 # CEW eye dataset: research use only, redistribution not allowed - never commit
 data/external/cew/

@@ -3,9 +3,9 @@
 #  Behaviour model trained on REAL data: 322 Sri Lankan students with the
 #  IGDS9-SF (Manchanayake, 2021; notebooks/07_train_real_igd_model.py)
 #  Guided patient workflow:
-#    1. Student Details      - gaming, sleep and wellbeing questionnaire
+#    1. Student Details      - gaming, sleep and wellbeing questionnaire + mood (PHQ-4) and loneliness (UCLA-3)
 #    2. Cognitive Tests      - 2-Back, Task-Switching, Mental Rotation, Go/No-Go
-#    3. Eye Check            - face/eye localisation + eye-state CNN (optional)
+#    3. Eye Check            - webcam ResNet50 + OpenCV (optional)
 #    4. Risk Result          - confidence-weighted late fusion + PDF report
 #    5. Solution & Plan      - personal habit changes + CBT-based reduction programme
 #  Researcher tools: model performance, continuous eye monitor
@@ -31,14 +31,14 @@ from reportlab.lib import colors
 
 # Import Late Fusion Engine module
 import fusion_engine as fe
-# Eye localisation + eye-state CNN for the Eye Check
-import eye_analysis
 # Shared feature encoding for the real-data IGD model
 import igd_features as igdf
 # Research-based cognitive battery (2-Back, Task-Switching, Mental Rotation, Go/No-Go)
 import research_cognitive_tests as rct
 # Continuous eye-session logs (researcher tool)
 import eye_sessions
+# Consented study: webcam eye measures vs gaming hours / IGDS9-SF (researcher tool)
+import eye_gaming_study
 # Evidence-based self-help programme for reducing problem gaming (CBT components)
 import reduction_program
 
@@ -66,14 +66,14 @@ def load_all_models():
     # (notebooks/07_train_real_igd_model.py, Manchanayake 2021, n = 322)
     igd = joblib.load(os.path.join(BASE, 'models', 'igd_risk_model.pkl'))
     clusters = joblib.load(os.path.join(BASE, 'models', 'igd_clusters.pkl'))
-    # Eye check: YuNet eye localisation + eye-state CNN trained on the MRL Eye Dataset
-    # (notebooks/08_train_eye_state_model.py, evaluated on people unseen in training)
-    analyzer = eye_analysis.EyeAnalyzer()
-    return igd['model'], igd['meta'], clusters, analyzer
+    # Eye-fatigue ResNet50, trained on the real MRL Eye Dataset (Fusek, 2018)
+    resnet_eye_path = os.path.join(BASE, 'models', 'resnet_eye_fatigue_model.h5')
+    resnet = load_model(resnet_eye_path, compile=False) if os.path.exists(resnet_eye_path) else None
+    return igd['model'], igd['meta'], clusters, resnet
 
 
 try:
-    igd_model, igd_meta, igd_clusters, eye_analyzer = load_all_models()
+    igd_model, igd_meta, igd_clusters, resnet_eye_model = load_all_models()
 except FileNotFoundError as e:
     st.error(f"Model file missing ({e.filename}). Run `python notebooks/07_train_real_igd_model.py` first.")
     st.stop()
@@ -221,9 +221,12 @@ def generate_pdf_report_v5(results_dict):
         [Paragraph("Cognitive vote (Go/No-Go response inhibition, literature prior)", body_style),
          Paragraph(f"<b>{results_dict['cog_pred']}</b>", body_style),
          Paragraph(f"Conf: {results_dict['cog_conf']:.2f} (Weight: {results_dict['cog_w']:.2f})", body_style)],
-        [Paragraph("Eye-fatigue vote (eye-state CNN, literature prior)", body_style),
+        [Paragraph("Eye-fatigue vote (ResNet50 + OpenCV, literature prior)", body_style),
          Paragraph(f"<b>{results_dict['eye_pred']}</b>", body_style),
          Paragraph(f"Conf: {results_dict['eye_conf']:.2f} (Weight: {results_dict['eye_w']:.2f})", body_style)],
+        [Paragraph("Wellbeing vote (mood PHQ-4 + loneliness UCLA-3, literature prior)", body_style),
+         Paragraph(f"<b>{results_dict['wb_pred']}</b>", body_style),
+         Paragraph(f"Conf: {results_dict['wb_conf']:.2f} (Weight: {results_dict['wb_w']:.2f})", body_style)],
         [Paragraph("<b>Fused result</b>", bold_body_style), Paragraph(f"<b>{results_dict['risk_level']}</b>", bold_body_style),
          Paragraph("Log-linear opinion pooling", bold_body_style)],
         [Paragraph("Predicted IGDS9-SF score (9-45)", body_style),
@@ -232,7 +235,7 @@ def generate_pdf_report_v5(results_dict):
     ]
     t_fusion = Table(fusion_data, colWidths=[200, 130, 170])
     t_fusion.setStyle(table_style)
-    t_fusion.setStyle(TableStyle([('BACKGROUND', (0, 4), (-1, 4), colors.HexColor("#FEF3C7"))]))
+    t_fusion.setStyle(TableStyle([('BACKGROUND', (0, 5), (-1, 5), colors.HexColor("#FEF3C7"))]))
     story.append(t_fusion)
     story.append(Spacer(1, 8))
 
@@ -243,7 +246,7 @@ def generate_pdf_report_v5(results_dict):
     story.append(Spacer(1, 8))
 
     # 4. Measured tests
-    story.append(Paragraph("4. Measured Cognitive Tests & Eye Fatigue", h1_style))
+    story.append(Paragraph("4. Measured Cognitive Tests, Eye Fatigue & Wellbeing", h1_style))
     bio_data = [
         [Paragraph("<b>Measure</b>", bold_body_style), Paragraph("<b>Measured value</b>", bold_body_style),
          Paragraph("<b>Interpretation</b>", bold_body_style)],
@@ -274,6 +277,11 @@ def generate_pdf_report_v5(results_dict):
     if 'mental_rotation' in ext:
         r = ext['mental_rotation']
         bio_data.append([Paragraph("Mental Rotation", body_style), Paragraph(f"{r['accuracy']}% ({r['mean_rt']} ms)", body_style), Paragraph(f"Rate {r['slope_ms_per_deg']} ms/deg", body_style)])
+    wb = results_dict.get('wellbeing')
+    if wb:
+        bio_data.append([Paragraph("Low mood (PHQ-2)", body_style), Paragraph(f"{wb['phq2']} / 6", body_style), Paragraph(wb['phq2_text'], body_style)])
+        bio_data.append([Paragraph("Anxiety (GAD-2)", body_style), Paragraph(f"{wb['gad2']} / 6", body_style), Paragraph(wb['gad2_text'], body_style)])
+        bio_data.append([Paragraph("Loneliness (UCLA-3)", body_style), Paragraph(f"{wb['lonely']} / 9", body_style), Paragraph(wb['lonely_text'], body_style)])
     t_bio = Table(bio_data, colWidths=[170, 160, 170])
     t_bio.setStyle(table_style)
     story.append(t_bio)
@@ -301,7 +309,7 @@ def generate_pdf_report_v5(results_dict):
 # ── Sidebar Navigation: guided patient workflow + researcher tools ────────────
 STEPS = ["1️⃣ Student Details", "2️⃣ Cognitive Tests", "3️⃣ Eye Check", "4️⃣ Risk Result", "5️⃣ Solution & Plan"]
 PATIENT_PAGES = STEPS + ["📋 Student History"]
-RESEARCH_PAGES = ["📊 Model Performance", "🎮 Eye Session Monitor"]
+RESEARCH_PAGES = ["📊 Model Performance", "🎮 Eye Session Monitor", "👁️ Eye–Gaming Study"]
 NAV_MODES = {"🩺 Patient Assessment": PATIENT_PAGES, "🔬 Researcher Tools": RESEARCH_PAGES}
 PATIENT_KEYS = ['patient_inputs', 'cognitive_results', 'mem_score', 'att_score', 'eye_fatigue_score',
                 'eye_fatigue_level', 'eye_fatigue_source', 'eye_skipped', 'last_assessment',
@@ -310,7 +318,27 @@ DEFAULT_INPUTS = dict(age=21, gender="Male", start_age=10, sports="Minor", weekd
                       mode=igdf.MODES[0], genre=igdf.GENRES[0], device=igdf.DEVICES[0], sleep_hours=7.0,
                       sleep_quality=7, self_esteem=4, few_friends=2)
 SPORTS_LEVELS = ["None", "Minor", "Moderate", "Major"]
+# Wellbeing check: two short validated scales (literature prior in the fusion, see fusion_engine.py)
+# PHQ-4 (Kroenke, Spitzer, Williams & Löwe, 2009): items 1-2 = GAD-2 (anxiety), items 3-4 = PHQ-2 (low mood)
+PHQ4_ITEMS = ["Feeling nervous, anxious or on edge", "Not being able to stop or control worrying",
+              "Little interest or pleasure in doing things", "Feeling down, depressed or hopeless"]
+PHQ4_OPTIONS = ["Not at all", "Several days", "More than half the days", "Nearly every day"]   # 0-3
+# 3-item UCLA Loneliness Scale (Hughes, Waite, Hawkley & Cacioppo, 2004)
+UCLA3_ITEMS = ["How often do you feel that you lack companionship?", "How often do you feel left out?",
+               "How often do you feel isolated from others?"]
+UCLA3_OPTIONS = ["Hardly ever", "Some of the time", "Often"]                                   # 1-3
 ss = st.session_state
+
+
+def wellbeing_scores(inputs):
+    """Scale totals with the published cut-offs: PHQ-2 / GAD-2 >= 3 is a positive screen (Kroenke et al., 2009);
+    UCLA-3 >= 6 is the usual cut-off for loneliness."""
+    phq = inputs['phq4']
+    gad2, phq2, lonely = phq[0] + phq[1], phq[2] + phq[3], sum(inputs['ucla3'])
+    return {'gad2': gad2, 'phq2': phq2, 'phq4': gad2 + phq2, 'lonely': lonely,
+            'gad2_text': "Above screening cut-off" if gad2 >= 3 else "Below cut-off",
+            'phq2_text': "Above screening cut-off" if phq2 >= 3 else "Below cut-off",
+            'lonely_text': "Often lonely" if lonely >= 6 else "Not lonely"}
 
 
 def step_done(step):
@@ -365,12 +393,19 @@ if page == STEPS[0]:
     st.caption("Screening tool from a research prototype — not a medical diagnosis.")
 
     def save_details():
+        phq = [ss.get(f'f_phq_{i}') for i in range(len(PHQ4_ITEMS))]
+        ucla = [ss.get(f'f_ucla_{i}') for i in range(len(UCLA3_ITEMS))]
+        if None in phq + ucla:
+            ss['f_missing'] = True               # shown below the form; stay on this step
+            return
+        ss['f_missing'] = False
         ss['patient_inputs'] = dict(
             age=ss['f_age'], gender=ss['f_gender'], start_age=min(ss['f_start_age'], ss['f_age']),
             sports=ss['f_sports'], sports_level=SPORTS_LEVELS.index(ss['f_sports']),
             weekday_hours=ss['f_weekday'], weekend_hours=ss['f_weekend'], mode=ss['f_mode'], genre=ss['f_genre'],
             device=ss['f_device'], sleep_hours=ss['f_sleep'], sleep_quality=ss['f_sleep_q'],
-            self_esteem=ss['f_esteem'], few_friends=ss['f_friends'])
+            self_esteem=ss['f_esteem'], few_friends=ss['f_friends'],
+            phq4=[PHQ4_OPTIONS.index(a) for a in phq], ucla3=[UCLA3_OPTIONS.index(a) + 1 for a in ucla])
         ss.pop('last_assessment', None)          # answers changed -> result must be recalculated
         go_to(STEPS[1])
 
@@ -396,8 +431,22 @@ if page == STEPS[0]:
             st.slider("Sleep quality (0 = very poor, 10 = excellent)", 0, 10, int(p['sleep_quality']), key="f_sleep_q")
             st.slider("How would you rate your self-esteem? (1 = very low, 5 = very high)", 1, 5, int(p['self_esteem']), key="f_esteem")
             st.slider("\"I have few or no close friends\" (1 = not true, 5 = very true)", 1, 5, int(p['few_friends']), key="f_friends")
+        st.divider()
+        m1, m2 = st.columns(2)
+        with m1:
+            st.markdown("**💬 Mood** — over the **last 2 weeks**, how often have you been bothered by:")
+            for i, q in enumerate(PHQ4_ITEMS):
+                prev = p['phq4'][i] if 'phq4' in p else None
+                st.radio(q, PHQ4_OPTIONS, index=prev, key=f"f_phq_{i}")
+        with m2:
+            st.markdown("**🤝 Feeling connected** — think about your life in general:")
+            for i, q in enumerate(UCLA3_ITEMS):
+                prev = p['ucla3'][i] - 1 if 'ucla3' in p else None
+                st.radio(q, UCLA3_OPTIONS, index=prev, key=f"f_ucla_{i}")
         st.form_submit_button(f"Save details — Next: {STEPS[1]} ➡️", type="primary", use_container_width=True,
                               on_click=save_details)
+    if ss.get('f_missing'):
+        st.error("Please answer all the mood and feeling-connected questions.")
 
 
 # ════════════════════════════════════════════════════════════
@@ -446,66 +495,113 @@ elif page == STEPS[2]:
         ss['eye_skipped'] = True
         go_to(STEPS[3])
 
-    st.markdown("Take a photo of your face with the webcam (or upload one). The app finds both eyes and checks how open "
-                "they are — drooping or closing eyelids are the main visible sign of tiredness.")
-    st.caption("Best results: face the camera in good light. The photo is analysed in memory and never saved.")
+    st.markdown("Capture a live photo using your webcam or upload a photo to analyze visual strain, redness, and aperture openness.")
 
+    # Choice of Input Method
     # No default selection: the webcam only turns on when chosen, so it stays free for the session monitor
     input_source = st.radio("Choose Input Method:", ["📸 Live Webcam Camera", "📁 Upload Image File"], horizontal=True, index=None)
 
     pil_img = None
+
     if input_source == "📸 Live Webcam Camera":
-        cam_photo = st.camera_input("Take a photo of your face")
+        cam_photo = st.camera_input("Take a photo of your face / eyes")
         if cam_photo:
             pil_img = Image.open(cam_photo).convert('RGB')
     elif input_source == "📁 Upload Image File":
-        uploaded_file = st.file_uploader("Upload a face or eye photo (JPG/PNG)", type=["jpg", "jpeg", "png"])
+        uploaded_file = st.file_uploader("Upload Eye Photo (JPG/PNG)", type=["jpg", "jpeg", "png"])
         if uploaded_file:
             pil_img = Image.open(uploaded_file).convert('RGB')
 
     if pil_img is not None:
-        with st.spinner("🔍 Finding your eyes and checking how open they are..."):
-            res = eye_analyzer.analyze(np.array(pil_img))
+        img_array = np.array(pil_img)
+    
         col1, col2 = st.columns(2)
-        col1.image(pil_img, caption="Your photo", use_container_width=True)
-        col2.image(res['annotated_rgb'], use_container_width=True,
-                   caption=f"Eyes found: {res['eyes_found']} ({res['method']}) — label = eye state and P(closed)")
+        with col1:
+            st.image(pil_img, caption="Original Input", use_container_width=True)
 
-        if res['fatigue_score'] is None and res['reason'] == 'too_small':
-            st.warning("Your eyes are too small in this photo to judge reliably — move closer to the camera so your "
-                       "face fills more of the picture, then try again (or skip this step).")
-        elif res['fatigue_score'] is None:
-            st.warning("No eyes could be found in this photo. Try again facing the camera in good light — "
-                       "or skip this step.")
-        else:
-            fatigue, level = res['fatigue_score'], res['level']
-            color = "green" if fatigue < 25 else "orange" if fatigue < 50 else "red"
-            advice = ("Your eyes look open and alert." if fatigue < 25
-                      else "Your eyelids look a little heavy — take a short screen break." if fatigue < 50
-                      else "Your eyes look partly closed — a sign of tiredness. Rest your eyes (20-20-20 rule)." if fatigue < 75
-                      else "Your eyes look closed or nearly closed — you seem very tired. Rest before gaming or studying.")
-            st.divider()
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Eye Fatigue Score", f"{fatigue}/100")
-            c2.metric("Level", level)
-            c3.metric("Eyes open (model)", f"{100 - fatigue:.0f}%")
-            c4.metric("Redness indicator", f"{res['redness']}" if res['redness'] is not None else "—",
-                      help="Uncalibrated colour measure of the white of the eye; shown for information, not scored.")
-            m = eye_analyzer.meta
-            st.caption("Per-eye probability of a closed eye: " + " · ".join(f"{p:.2f}" for p in res['p_closed'])
-                       + f". Eye-state CNN trained on the MRL Eye Dataset"
-                         f"{' plus real-world CEW faces' if m.get('version', 1) >= 2 else ''}; on {m['test_people']} people it never saw "
-                         f"in training it was {m['accuracy'] * 100:.1f}% accurate (AUC {m['auc']:.3f}).")
-            st.markdown(f"**Status:** :{color}[**{advice}**]")
+        with st.spinner("🔍 Processing OpenCV Eye Biomarkers..."):
+            gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+            eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
+            eyes = eye_cascade.detectMultiScale(gray, 1.1, 5, minSize=(30, 30))
 
-            first_scan = ss.get('eye_fatigue_score') != fatigue
-            st.session_state['eye_fatigue_score'] = fatigue
-            st.session_state['eye_fatigue_level'] = level
-            st.session_state['eye_fatigue_source'] = 'single_scan'
-            if first_scan:
-                ss.pop('last_assessment', None)      # new eye score -> result must be recalculated
-                st.rerun()                           # redraw so the sidebar ticks this step straight away
-            st.success("✅ Eye fatigue score saved for your risk result.")
+            annotated = img_array.copy()
+            eye_detected = len(eyes) > 0
+            openness = 50.0
+
+            if eye_detected:
+                ex, ey, ew, eh = max(eyes, key=lambda e: e[2]*e[3])
+                cv2.rectangle(annotated, (ex, ey), (ex+ew, ey+eh), (0, 255, 0), 2)
+                cv2.putText(annotated, "Eye Detected", (ex, ey-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                eye_gray = gray[ey:ey+eh, ex:ex+ew]
+                _, bright = cv2.threshold(eye_gray, 180, 255, cv2.THRESH_BINARY)
+                openness = round(np.sum(bright > 0) / bright.size * 100, 2)
+
+            r = img_array[:, :, 0].astype(float)
+            g = img_array[:, :, 1].astype(float)
+            b = img_array[:, :, 2].astype(float)
+            redness = round(float(np.mean(np.clip(r - (g + b) / 2, 0, 255))) / 255 * 100, 2)
+            brightness = round(float(np.mean(gray)), 2)
+            contrast = round(float(np.std(gray)), 2)
+
+            # Compute OpenCV Biometric Fatigue Heuristics (0-100)
+            opencv_fatigue = 0.0
+            opencv_fatigue += 35 if openness < 15 else 20 if openness < 30 else 10 if openness < 45 else 0
+            opencv_fatigue += 30 if redness > 25 else 15 if redness > 15 else 8 if redness > 8 else 0
+            opencv_fatigue += 20 if brightness < 80 else 10 if brightness < 120 else 0
+            opencv_fatigue += 15 if contrast < 30 else 8 if contrast < 50 else 0
+            opencv_fatigue = round(min(100, opencv_fatigue), 1)
+
+            # Deep ResNet50 Transfer Learning Live Inference
+            resnet_fatigue = None
+            if resnet_eye_model is not None:
+                try:
+                    if eye_detected:
+                        crop = img_array[ey:ey+eh, ex:ex+ew]
+                    else:
+                        crop = img_array
+                    crop_resized = cv2.resize(crop, (64, 64))
+                    crop_norm = np.expand_dims(crop_resized.astype('float32') / 255.0, axis=0)
+                    p_alert = float(resnet_eye_model.predict(crop_norm, verbose=0)[0][0])
+                    # MRL model output: 1.0 = Alert, 0.0 = Fatigued
+                    resnet_fatigue = round(float(1.0 - p_alert) * 100, 1)
+                    # Unified Score: 70% Deep ResNet50 Neural Net + 30% OpenCV Biometrics
+                    fatigue = round(0.70 * resnet_fatigue + 0.30 * opencv_fatigue, 1)
+                except Exception as ex_pred:
+                    fatigue = opencv_fatigue
+            else:
+                fatigue = opencv_fatigue
+
+        with col2:
+            st.image(annotated, caption="OpenCV Cascade & Scleral Segmentation", use_container_width=True)
+
+        st.divider()
+        level = ("Alert" if fatigue < 25 else "Mildly Fatigued" if fatigue < 50
+                 else "Fatigued" if fatigue < 75 else "Severely Fatigued")
+        color = "green" if fatigue < 25 else "orange" if fatigue < 50 else "red"
+        advice = ("No significant visual fatigue detected." if fatigue < 25
+                  else "Mild eye strain detected. Take a brief break." if fatigue < 50
+                  else "Noticeable eye strain." if fatigue < 75
+                  else "Severe ocular fatigue. Rest eyes immediately.")
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Eye Fatigue Score", f"{fatigue}/100")
+        c2.metric("Clinical Level", level)
+        c3.metric("Aperture Openness", f"{openness:.1f}%")
+        c4.metric("Scleral Redness", f"{redness:.1f}%")
+    
+        if resnet_fatigue is not None:
+            st.info(f"🧠 **Deep ResNet50 Neural Net Output:** {resnet_fatigue:.1f}/100 Visual Strain Probability | **OpenCV Biometrics:** {opencv_fatigue:.1f}/100")
+        
+        st.markdown(f"**Status:** :{color}[**{advice}**]")
+
+        first_scan = ss.get('eye_fatigue_score') != fatigue
+        st.session_state['eye_fatigue_score'] = fatigue
+        st.session_state['eye_fatigue_level'] = level
+        st.session_state['eye_fatigue_source'] = 'single_scan'
+        if first_scan:
+            ss.pop('last_assessment', None)      # new eye score -> result must be recalculated
+            st.rerun()                           # redraw so the sidebar ticks this step straight away
+        st.success("✅ Eye fatigue score saved for your risk result.")
 
     st.divider()
     if 'eye_fatigue_score' in ss:
@@ -559,7 +655,16 @@ elif page == STEPS[3]:
         else:
             fatigue_val, eye_proba, eye_conf = None, np.ones(3) / 3, 0.0
 
-        fused_proba, weights_dict = fe.fuse([(beh_proba, beh_conf), (cog_proba, cog_conf), (eye_proba, eye_conf)])
+        # 4. Wellbeing vote: PHQ-4 mood + UCLA-3 loneliness (literature prior)
+        wb = wellbeing_scores(inputs) if 'phq4' in inputs else None
+        if wb:
+            wb_proba, wb_conf = fe.wellbeing_vote(wb['phq4'], wb['lonely'])
+            wb_risk_label = igdf.RISK_LABELS[int(np.argmax(wb_proba))]
+        else:
+            wb_proba, wb_conf, wb_risk_label = np.ones(3) / 3, 0.0, "Not measured"
+
+        fused_proba, weights_dict = fe.fuse([(beh_proba, beh_conf), (cog_proba, cog_conf), (eye_proba, eye_conf),
+                                             (wb_proba, wb_conf)])
         fused_pred_idx = int(np.argmax(fused_proba))
         risk_labels = igdf.RISK_LABELS
         fused_risk_label = risk_labels[fused_pred_idx]
@@ -588,6 +693,7 @@ elif page == STEPS[3]:
             'rf_pred': beh_risk_label, 'rf_conf': beh_conf, 'rf_w': weights_dict['Behaviour_weight'],
             'cog_pred': cog_risk_label, 'cog_conf': cog_conf, 'cog_w': weights_dict['Cognitive_weight'],
             'eye_pred': eye_risk_label, 'eye_conf': eye_conf, 'eye_w': weights_dict['EyeFatigue_weight'],
+            'wb_pred': wb_risk_label, 'wb_conf': wb_conf, 'wb_w': weights_dict['Wellbeing_weight'], 'wellbeing': wb,
             'fused_pred': fused_risk_label, 'fused_idx': fused_pred_idx, 'fused_proba': fused_proba,
             'pred_igds': pred_igds, 'archetype': archetype, 'archetype_desc': archetype_desc,
             'total_hours': total_hours, 'sleep_hours': sleep_hours, 'rt_actual': rt_actual, 'fatigue_val': fatigue_val,
@@ -596,6 +702,7 @@ elif page == STEPS[3]:
             'rf_proba': [float(p) for p in beh_proba],
             'cog_proba': [float(p) for p in cog_proba],
             'eye_proba': [float(p) for p in eye_proba],
+            'wb_proba': [float(p) for p in wb_proba],
             'used_measured_cognition': has_cognitive,
             'used_measured_eye': has_eye,
         }
@@ -621,19 +728,21 @@ elif page == STEPS[3]:
             st.markdown("#### 🔬 Modality Weight & Confidence Breakdown")
             df_fusion_vis = pd.DataFrame({
                 'Modality': [f'1. Behaviour model ({model_name})', '2. Cognitive vote (Go/No-Go prior)',
-                             '3. Eye-fatigue vote (prior)', '🏆 Fused Consensus'],
-                'Predicted Vote': [beh_risk_label, cog_risk_label, eye_risk_label, fused_risk_label],
+                             '3. Eye-fatigue vote (prior)', '4. Wellbeing vote (mood + loneliness prior)',
+                             '🏆 Fused Consensus'],
+                'Predicted Vote': [beh_risk_label, cog_risk_label, eye_risk_label, wb_risk_label, fused_risk_label],
                 'Confidence': [f"{beh_conf * 100:.1f}%", f"{cog_conf * 100:.1f}%", f"{eye_conf * 100:.1f}%",
-                               f"{float(np.max(fused_proba)) * 100:.1f}%"],
+                               f"{wb_conf * 100:.1f}%", f"{float(np.max(fused_proba)) * 100:.1f}%"],
                 'Fusion Weight': [f"{weights_dict['Behaviour_weight'] * 100:.1f}%",
                                   f"{weights_dict['Cognitive_weight'] * 100:.1f}%",
-                                  f"{weights_dict['EyeFatigue_weight'] * 100:.1f}%", "100.0%"],
+                                  f"{weights_dict['EyeFatigue_weight'] * 100:.1f}%",
+                                  f"{weights_dict['Wellbeing_weight'] * 100:.1f}%", "100.0%"],
             })
             st.dataframe(df_fusion_vis, use_container_width=True, hide_index=True)
             st.caption("Low / Medium / High probabilities: " + " · ".join(
                 f"{l.split()[0]} {p * 100:.0f}%" for l, p in zip(risk_labels, fused_proba)))
             if int(np.argmax(beh_proba)) != fused_pred_idx:
-                st.warning(f"⚡ **Late Fusion Effect:** the cognitive/eye votes moved the result from "
+                st.warning(f"⚡ **Late Fusion Effect:** the cognitive/eye/wellbeing votes moved the result from "
                            f"**{beh_risk_label}** to **{fused_risk_label}**.")
 
         st.divider()
@@ -659,6 +768,7 @@ elif page == STEPS[3]:
             'rf_pred': beh_risk_label, 'rf_conf': beh_conf, 'rf_w': weights_dict['Behaviour_weight'],
             'cog_pred': cog_risk_label, 'cog_conf': cog_conf, 'cog_w': weights_dict['Cognitive_weight'],
             'eye_pred': eye_risk_label, 'eye_conf': eye_conf, 'eye_w': weights_dict['EyeFatigue_weight'],
+            'wb_pred': wb_risk_label, 'wb_conf': wb_conf, 'wb_w': weights_dict['Wellbeing_weight'], 'wellbeing': wb,
             'risk_level': fused_risk_label, 'risk_idx': fused_pred_idx, 'pred_igds': pred_igds, 'mae': cv['MAE'],
             'archetype': archetype, 'archetype_desc': archetype_desc,
             'rt_measured': rt_actual,
@@ -732,6 +842,19 @@ elif page == STEPS[4]:
                         "**Urge surfing** and **if-then plans** in the programme below target exactly this.")
         else:
             st.markdown(f"- **Impulse control:** good — you held back on {100 - commission}% of the red (No-Go) circles.")
+        wb = a.get('wellbeing')
+        if wb:
+            if wb['phq2'] >= 3 or wb['gad2'] >= 3:
+                feeling = " and ".join(n for n, s in [("low mood", wb['phq2']), ("worry / anxiety", wb['gad2'])] if s >= 3)
+                st.markdown(f"- **Mood:** your answers show {feeling} on many days in the last two weeks. Many people game "
+                            "to escape these feelings, which makes cutting down harder. **Talk to someone you trust** or the "
+                            "university counsellor — or call the National Mental Health Helpline **1926** (free, 24 h).")
+            if wb['lonely'] >= 6:
+                st.markdown("- **Feeling connected:** you often feel left out or alone. Gaming can fill that gap, but "
+                            "offline contact protects against problem gaming. Plan **one activity a week with other people** "
+                            "(a sport, club or study group) in the programme below.")
+            if wb['phq2'] < 3 and wb['gad2'] < 3 and wb['lonely'] < 6:
+                st.markdown("- **Mood & connection:** good — no signs of low mood, anxiety or loneliness in your answers.")
         if b['nback']['d_prime'] < 1.5:
             st.markdown("- **Working memory** (2-Back) was on the lower side. Sleep and fewer late-night sessions help "
                         "concentration; re-test after two weeks of your plan.")
@@ -794,6 +917,18 @@ elif page == "🎮 Eye Session Monitor":
 
 
 # ════════════════════════════════════════════════════════════
+#  RESEARCHER TOOLS: EYE–GAMING STUDY
+# ════════════════════════════════════════════════════════════
+elif page == "👁️ Eye–Gaming Study":
+    @st.cache_resource
+    def load_study_eye_analyzer():
+        # Eye-state CNN (notebooks/08_train_eye_state_model.py), loaded only for the study
+        import eye_analysis
+        return eye_analysis.EyeAnalyzer()
+    eye_gaming_study.render_page(load_study_eye_analyzer())
+
+
+# ════════════════════════════════════════════════════════════
 #  RESEARCHER TOOLS: MODEL PERFORMANCE
 # ════════════════════════════════════════════════════════════
 elif page == "📊 Model Performance":
@@ -833,30 +968,18 @@ elif page == "📊 Model Performance":
                 st.dataframe(comp.round(3), use_container_width=True, hide_index=True)
 
     with t_perf2:
-        em = eye_analyzer.meta
-        st.subheader("Eye-State Model (open vs closed eyes)")
-        st.caption(f"MRL Eye Dataset (Fusek, 2018). Subject-wise test: {em['test_people']} people "
-                   f"({em['test_images']:,} images) who were never seen in training.")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Accuracy (unseen people)", f"{em['accuracy'] * 100:.1f}%")
-        c2.metric("AUC", f"{em['auc']:.3f}")
-        c3.metric("Closed eyes caught", f"{em['recall_closed'] * 100:.1f}%")
-        c4.metric("Open eyes correct", f"{em['recall_open'] * 100:.1f}%")
-        if 'cew_test' in em:
-            ct = em['cew_test']
-            st.caption(f"Held-out real-world colour faces (CEW, {ct['images']} eye crops): accuracy "
-                       f"{ct['accuracy'] * 100:.1f}%, AUC {ct['auc']:.3f}. Decision threshold {em['threshold']:.2f} "
-                       f"chosen on validation people only; predictions averaged with the mirror image.")
-        for sub, fname in zip(st.tabs(["Training History", "Confusion Matrix"]),
-                              ['eye3_state_training_history.png', 'eye4_state_confusion_matrix.png']):
-            path = os.path.join(BASE, 'results', fname)
-            with sub:
-                if os.path.exists(path):
-                    st.image(path, use_container_width=True)
-                else:
-                    st.warning("Run `python notebooks/08_train_eye_state_model.py` to generate this chart.")
-        st.info("Earlier eye models were retired: the baseline CNN was trained on the wrong label (the MRL "
-                "'reflections' field instead of eye state), and the app read the ResNet50's output the wrong way round.")
+        st.subheader("Eye Fatigue Classifiers (MRL Eye Dataset, Fusek 2018)")
+        tab_resnet, tab_cnn = st.tabs(["ResNet50 (deployed)", "Baseline CNN"])
+        for tab, files in [(tab_resnet, ['resnet_eye_training_history.png', 'resnet_eye_confusion_matrix.png']),
+                           (tab_cnn, ['eye1_training_history.png', 'eye2_confusion_matrix.png'])]:
+            with tab:
+                for sub, fname in zip(st.tabs(["Training History", "Confusion Matrix"]), files):
+                    path = os.path.join(BASE, 'results', fname)
+                    with sub:
+                        if os.path.exists(path):
+                            st.image(path, use_container_width=True)
+                        else:
+                            st.warning(f"{fname} not found.")
 
     with t_perf3:
         st.subheader("Confidence-Weighted Late Fusion")
@@ -865,10 +988,11 @@ elif page == "📊 Model Performance":
 |---|---|---|
 | Behaviour | {model_name}, trained on real IGDS9-SF data | its own confidence (max probability) |
 | Cognitive | Go/No-Go commission errors — literature prior | capped at r = {fe.COGNITIVE_LITERATURE_WEIGHT:.2f} (d = {fe.INHIBITION_EFFECT_D}, Argyriou et al., 2017) |
-| Eye fatigue | Eye-state CNN (share of closed eyes) — literature prior | capped at {fe.EYE_FATIGUE_LITERATURE_WEIGHT} (Liu & Zhou, 2024) |
+| Eye fatigue | ResNet50 + OpenCV score — literature prior | capped at {fe.EYE_FATIGUE_LITERATURE_WEIGHT} (Liu & Zhou, 2024) |
+| Wellbeing | PHQ-4 mood (Kroenke et al., 2009) + UCLA-3 loneliness (Hughes et al., 2004) — literature prior | capped at r = {fe.WELLBEING_LITERATURE_WEIGHT:.2f} (Yoon et al., 2021: depression .33, anxiety .29, loneliness .29) |
 """)
         st.info("Whether fusion improves on the behaviour model alone can only be tested on data where the same students "
-                "have the questionnaire, cognitive tests and eye check; no public dataset has all three. The earlier "
+                "have the questionnaire, cognitive tests and eye check; no public dataset has all of them. The earlier "
                 "76.3% → 79.3% fusion result was computed on synthetic data and has been withdrawn.")
 
     with t_perf4:

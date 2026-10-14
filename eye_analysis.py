@@ -28,9 +28,16 @@ MAX_SIDE = 960              # downscale large photos before detection
 MIN_CROP = 40               # eye crops smaller than this (px) are too blurry to judge; MRL crops are ~60-120 px
 
 
+LEVEL_NAMES = ["Fresh eyes", "Slightly tired", "Tired eyes", "Very tired"]
+
+
+def level_index(score):
+    """0-3 for eye tiredness scores <25, <50, <75, >=75."""
+    return 0 if score < 25 else 1 if score < 50 else 2 if score < 75 else 3
+
+
 def level_of(score):
-    return ("Alert" if score < 25 else "Mildly Fatigued" if score < 50
-            else "Fatigued" if score < 75 else "Severely Fatigued")
+    return LEVEL_NAMES[level_index(score)]
 
 
 def make_face_detector():
@@ -105,9 +112,12 @@ class EyeAnalyzer:
             return []
         X = np.stack([prep_crop(bgr[y0:y1, x0:x1], self.size) for x0, y0, x1, y1 in boxes])[..., None]
         X = X.astype('float32')
-        p = self.model.predict(X, verbose=0).ravel()
-        if self.tta:                                          # average with the mirror image
-            p = (p + self.model.predict(X[:, :, ::-1, :], verbose=0).ravel()) / 2
+        # Direct model call (much faster than .predict() for a few crops, so video can run in real time)
+        if self.tta:                                          # average with the mirror image, in one batch
+            out = self.model(np.concatenate([X, X[:, :, ::-1, :]]), training=False).numpy().ravel()
+            p = (out[:len(X)] + out[len(X):]) / 2
+        else:
+            p = self.model(X, training=False).numpy().ravel()
         return [float(v) for v in calibrate(p, self.threshold)]
 
     @staticmethod

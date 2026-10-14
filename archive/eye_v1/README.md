@@ -1,6 +1,11 @@
 # Archived: first eye-fatigue models (retired 2026-10-13)
 
-These files are kept for transparency. They are **no longer used by the app**.
+These files are kept for transparency.
+
+**Update 2026-10-14:** at the student's request the app's Eye Check (Step 3) and the background eye monitor
+were switched back to these original models, unchanged (copies in `models/`). The problems below still apply:
+in a test, open-eye photos scored higher fatigue (51-55) than closed-eye photos (36-39). The corrected
+eye-state model (`notebooks/08_train_eye_state_model.py`) is still used by the Eye-Gaming Study.
 
 Both models were trained on the MRL Eye Dataset (Fusek, 2018), whose file names are
 `subject_image_gender_glasses_EYESTATE_reflections_lighting_sensor` (eye state is field 4:
