@@ -11,6 +11,7 @@ __pycache__/
 # Model files (large binaries)
 *.pkl
 *.h5
+*.keras
 
 # Data files (large)
 *.csv
@@ -26,3 +27,18 @@ __pycache__/
 Thumbs.db
 .venv/
 data/eye_dataset/
+
+# Locally generated HTTPS certificate for phone access (desktop_app.py --lan)
+.streamlit/certs/
+
+# Students' personal progress in the Gaming Reduction Program
+data/program/
+
+# Eye-monitor session logs and live status
+data/eye_sessions/
+
+# Eye-gaming study responses (participant data)
+data/eye_gaming_study/
+
+# CEW eye dataset: research use only, redistribution not allowed - never commit
+data/external/cew/
