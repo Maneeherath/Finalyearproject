@@ -50,3 +50,6 @@ data/eye_gaming_study/
 
 # CEW eye dataset: research use only, redistribution not allowed - never commit
 data/external/cew/
+
+# Thesis drafts - kept private (public repository; checked for plagiarism on submission)
+thesis/
