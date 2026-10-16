@@ -253,8 +253,8 @@ def generate_pdf_report_v5(results_dict):
          Paragraph("<b>Interpretation</b>", bold_body_style)],
         [Paragraph("Go reaction time (ms)", body_style),
          Paragraph(f"{results_dict['rt_measured']} ms" if results_dict['rt_measured'] else "Not measured", body_style),
-         Paragraph(("Fast" if results_dict['rt_measured'] < 350 else "Typical" if results_dict['rt_measured'] < 500 else "Slow")
-                   if results_dict['rt_measured'] else "-", body_style)],
+         # No fast/slow label: lab norms (keyboard) do not apply to clicks in a web browser (pilot trial)
+         Paragraph("Browser click time; not compared with lab norms" if results_dict['rt_measured'] else "-", body_style)],
         [Paragraph("Working-memory score", body_style),
          Paragraph(f"{results_dict['mem_measured']}%" if results_dict['mem_measured'] is not None else "Not measured", body_style),
          Paragraph("-", body_style)],
@@ -300,6 +300,10 @@ def generate_pdf_report_v5(results_dict):
             "Use the Gaming Reduction Program alongside professional support.",
             "Protect sleep: no gaming in the hour before bed."],
     }[results_dict['risk_idx']]
+    if results_dict.get('possible_high'):
+        story.append(Paragraph(f"<b>Possible High risk:</b> there is a {results_dict['p_high'] * 100:.0f}% chance that "
+                               "the score is in the High band. Please also talk to a professional (Sri Lanka National "
+                               "Mental Health Helpline 1926).", body_style))
     for step in steps:
         story.append(Paragraph(f"- {step}", body_style))
 
@@ -657,7 +661,7 @@ elif page == STEPS[3]:
         # 4. Wellbeing vote: PHQ-4 mood + UCLA-3 loneliness (literature prior)
         wb = wellbeing_scores(inputs) if 'phq4' in inputs else None
         if wb:
-            wb_proba, wb_conf = fe.wellbeing_vote(wb['phq4'], wb['lonely'])
+            wb_proba, wb_conf = fe.wellbeing_vote(wb['phq2'], wb['gad2'], wb['lonely'])
             wb_risk_label = igdf.RISK_LABELS[int(np.argmax(wb_proba))]
         else:
             wb_proba, wb_conf, wb_risk_label = np.ones(3) / 3, 0.0, "Not measured"
@@ -679,7 +683,9 @@ elif page == STEPS[3]:
         profile = igd_clusters['profiles'][cluster_idx]
         archetype = profile['name']
         archetype_desc = (f"{profile['description']} Students in this group (n = {profile['n']}) averaged "
-                          f"{profile['mean_igds']:.1f} on the IGDS9-SF.")
+                          f"{profile['mean_igds']:.1f} on the IGDS9-SF. This is the closest group for your answers "
+                          f"overall (sleep, game type and wellbeing as well as hours); you reported "
+                          f"{total_hours:g} h of gaming a week.")
 
         color_map = {0: "green", 1: "orange", 2: "red"}
         icon_map = {0: "🟢", 1: "🟡", 2: "🔴"}
@@ -776,6 +782,7 @@ elif page == STEPS[3]:
             'eye_pred': eye_risk_label, 'eye_conf': eye_conf, 'eye_w': weights_dict['EyeFatigue_weight'],
             'wb_pred': wb_risk_label, 'wb_conf': wb_conf, 'wb_w': weights_dict['Wellbeing_weight'], 'wellbeing': wb,
             'risk_level': fused_risk_label, 'risk_idx': fused_pred_idx, 'pred_igds': pred_igds, 'mae': cv['MAE'],
+            'possible_high': possible_high, 'p_high': float(fused_proba[2]),
             'archetype': archetype, 'archetype_desc': archetype_desc,
             'rt_measured': rt_actual,
             'mem_measured': st.session_state.get('mem_score') if has_cognitive else None,

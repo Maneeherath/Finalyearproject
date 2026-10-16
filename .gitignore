@@ -53,3 +53,6 @@ data/external/cew/
 
 # Thesis drafts - kept private (public repository; checked for plagiarism on submission)
 thesis/
+
+# Test coverage data
+.coverage

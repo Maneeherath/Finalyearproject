@@ -67,6 +67,7 @@ TS_VOWELS, TS_CONSONANTS = ['A', 'E', 'I', 'U'], ['G', 'K', 'M', 'R']
 
 MR_LETTERS = ['R', 'F', 'G', 'J', 'L', 'P']   # asymmetric letters (normal vs mirror is distinguishable)
 MR_ANGLES = [0, 60, 120, 180, 240, 300]
+MR_REPEATS = 2                       # each angle once normal and once mirrored: 12 trials (6 gave unstable slopes)
 
 RESET_KEYS = ['nb_seq', 'nb_targets', 'nb_idx', 'nb_start', 'nb_log', 'nb_result',
               'gng_seq', 'gng_idx', 'gng_phase', 'gng_t0', 'gng_log', 'gng_result',
@@ -366,11 +367,11 @@ def render_task_switching():
 #  TEST 3: MENTAL ROTATION (COOPER & SHEPARD LETTER PARADIGM)
 # ════════════════════════════════════════════════════════════
 def _make_mr_trials():
-    angles = list(MR_ANGLES)                      # one trial per angle
-    mirrored = [True] * 3 + [False] * 3
-    random.shuffle(angles)
-    random.shuffle(mirrored)
-    return [{'letter': random.choice(MR_LETTERS), 'angle': a, 'mirrored': m} for a, m in zip(angles, mirrored)]
+    # Every angle appears once normal and once mirrored, so angle and mirroring are balanced
+    trials = [{'letter': random.choice(MR_LETTERS), 'angle': a, 'mirrored': m}
+              for a in MR_ANGLES for m in (False, True)][:len(MR_ANGLES) * MR_REPEATS]
+    random.shuffle(trials)
+    return trials
 
 
 def _score_mr(log):

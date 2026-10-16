@@ -99,10 +99,18 @@ def eye_fatigue_vote(fatigue_score_0_100):
 # ------------------------------------------------------------------
 # 4. Wellbeing vote (literature prior from PHQ-4 + 3-item loneliness)
 # ------------------------------------------------------------------
-def wellbeing_vote(phq4_total, loneliness_total):
-    """phq4_total: 0-12 (depression + anxiety items); loneliness_total: 3-9 (UCLA-3).
-    Each scale is put on 0-1 and averaged, so mood and loneliness count equally."""
-    f = float(np.clip((phq4_total / 12 + (loneliness_total - 3) / 6) / 2, 0, 1))
+def _scale_with_cutoff(x):
+    """x: 0-6 points above the scale minimum, published cut-off at 3 (PHQ-2, GAD-2 >= 3; UCLA-3 >= 6).
+    Below the cut-off -> 0-0.33; at or above it -> 0.625-1, so a positive screen always leans towards risk."""
+    return 0.5 * x / 3 if x < 3 else 0.5 + 0.5 * (x - 2) / 4
+
+
+def wellbeing_vote(phq2, gad2, loneliness_total):
+    """phq2, gad2: 0-6 (low mood, anxiety); loneliness_total: 3-9 (UCLA-3).
+    Each scale is put on 0-1 around its published cut-off and the HIGHEST is used: a clear problem
+    on one scale is not diluted by good scores on the others (pilot user trial, thesis Section 5.13)."""
+    f = float(np.clip(max(_scale_with_cutoff(phq2), _scale_with_cutoff(gad2),
+                          _scale_with_cutoff(loneliness_total - 3)), 0, 1))
     margin_from_uncertain = abs(f - 0.5) * 2
     return _soft_lean(f), margin_from_uncertain * WELLBEING_LITERATURE_WEIGHT
 
@@ -136,7 +144,7 @@ if __name__ == "__main__":
     behaviour_p, behaviour_c = behaviour_vote([0.10, 0.55, 0.35])
     cog_p, cog_c = cognitive_inhibition_vote(60)
     eye_p, eye_c = eye_fatigue_vote(72)
-    wb_p, wb_c = wellbeing_vote(8, 7)
+    wb_p, wb_c = wellbeing_vote(4, 4, 7)
     fused, weights = fuse([(behaviour_p, behaviour_c), (cog_p, cog_c), (eye_p, eye_c), (wb_p, wb_c)])
     print("Behaviour vote:", dict(zip(RISK_CLASSES, np.round(behaviour_p, 3))), "conf", round(behaviour_c, 3))
     print("Cognitive vote:", dict(zip(RISK_CLASSES, np.round(cog_p, 3))), "conf", round(cog_c, 3))

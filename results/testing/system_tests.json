@@ -1,0 +1,132 @@
+{
+ "input_space": {
+  "combinations": 4320,
+  "errors": 0,
+  "min_pred": 12.0,
+  "max_pred": 31.35,
+  "all_in_range": true,
+  "seconds": 120.0
+ },
+ "monotonicity": {
+  "weekday_hours": {
+   "profiles": 200,
+   "profiles_with_violation": 14,
+   "largest_reverse_step": 0.58
+  },
+  "weekend_hours": {
+   "profiles": 200,
+   "profiles_with_violation": 9,
+   "largest_reverse_step": 0.71
+  },
+  "sleep_quality": {
+   "profiles": 200,
+   "profiles_with_violation": 199,
+   "largest_reverse_step": 0.78
+  }
+ },
+ "reproducibility": {
+  "repeats": 100,
+  "distinct_outputs": 1
+ },
+ "batch": {
+  "students": 100,
+  "errors": 0,
+  "ms_per_assessment": 28.4,
+  "behaviour_tiers_LMH": [
+   2,
+   98,
+   0
+  ],
+  "fused_tiers_LMH": [
+   2,
+   98,
+   0
+  ],
+  "tier_changed_by_fusion": 2,
+  "changed_up": 1,
+  "changed_down": 1,
+  "possible_high_warnings": 15,
+  "behaviour_weight_min_median_max": [
+   0.4,
+   0.59,
+   0.9
+  ],
+  "score_min_median_max": [
+   15.4,
+   24.2,
+   31.0
+  ]
+ },
+ "timing_ms": {
+  "behaviour_prediction_median": 26.6,
+  "fusion_median": 0.038,
+  "eye_analysis_per_photo_median": 125.8
+ },
+ "eye_robustness": {
+  "photos": 20,
+  "open": 14,
+  "closed": 6,
+  "conditions": {
+   "original": {
+    "photos": 20,
+    "scored": 16,
+    "correct": 15,
+    "accuracy_of_scored": 0.938
+   },
+   "darker (×0.5)": {
+    "photos": 20,
+    "scored": 18,
+    "correct": 17,
+    "accuracy_of_scored": 0.944
+   },
+   "brighter (×1.5)": {
+    "photos": 20,
+    "scored": 18,
+    "correct": 17,
+    "accuracy_of_scored": 0.944
+   },
+   "blur (7×7)": {
+    "photos": 20,
+    "scored": 17,
+    "correct": 16,
+    "accuracy_of_scored": 0.941
+   },
+   "noise (σ = 15)": {
+    "photos": 20,
+    "scored": 17,
+    "correct": 16,
+    "accuracy_of_scored": 0.941
+   },
+   "rotated 10°": {
+    "photos": 20,
+    "scored": 17,
+    "correct": 16,
+    "accuracy_of_scored": 0.941
+   },
+   "rotated 20°": {
+    "photos": 20,
+    "scored": 16,
+    "correct": 14,
+    "accuracy_of_scored": 0.875
+   },
+   "half size": {
+    "photos": 20,
+    "scored": 17,
+    "correct": 16,
+    "accuracy_of_scored": 0.941
+   },
+   "quarter size": {
+    "photos": 20,
+    "scored": 12,
+    "correct": 11,
+    "accuracy_of_scored": 0.917
+   },
+   "JPEG quality 20": {
+    "photos": 20,
+    "scored": 17,
+    "correct": 16,
+    "accuracy_of_scored": 0.941
+   }
+  }
+ }
+}
